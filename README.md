@@ -26,5 +26,14 @@ The (sucessfull) new steps for porting are:
 
 Above steps are already achieved, but are not stable enough for release.
 
+The versions tested are:
+
+ GCC  : 9.3.0
+ LINUX: 5.4.46
+ GLIBC: 2.30
+ MUSL : 1.2.1
+ BIN  : 2.33.1
+
+
 Enjoy.
 
