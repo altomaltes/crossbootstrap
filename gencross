@@ -1,0 +1,1032 @@
+#!/bin/bash
+# Copyright 2017-2018  Jose Angel Caso Sanchez ASTURIAS, SPAIN
+#                      altomaltes@gmail.com
+# All rights reserved.
+#
+# Redistribution and use of this script, with or without modification, is
+# permitted provided that the following conditions are met:
+#
+# 1. Redistributions of this script must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+#  THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR IMPLIED
+#  WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+#  MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO
+#  EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+#  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+#  PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+#  OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+#  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+#  OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+#  ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+
+# rsync lzip python3 patchelf gawk rsync
+
+PRECOND="lzip python3 patchelf gawk rsync"
+
+for ITEM in ${PRECOND} ; do
+  PRG=$( which ${ITEM} 2>/dev/null )
+  if [ -n "${PRG}" ] ; then
+    echo ${ITEM} found as ${PRG}  >&2
+  else
+    echo ${ITEM} not found, must install >&2
+    exit
+  fi
+  unset PRG ITEM
+done
+
+DESTARCH=${1}
+
+unset LD_LIBRARY_PATH LIBRARY_PATH CPLUS_INCLUDE_PATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH
+
+WORKERS="-j 3"
+
+export LC_ALL="C"
+export SUFFIX                                  # multiarch generalize
+export LIBCTYPE=$(echo $OSTYPE | cut -f2 -d-)
+
+CWD=/tmp/slackroot; 
+KITCHEN=${CWD}/kitchen
+CROSSDIR=${KITCHEN}/tools
+BUILDFOLDER=build-${DESTARCH}-${HOSTTYPE}
+
+mkdir -p ${CWD} ${KITCHEN}/bin ${CROSSDIR}
+
+echo "">&2
+if [ -f "/etc/slackware-version" ] ; then
+  echo "Slackware version $(cat /etc/slackware-version ) detected" >&2
+  VENDOR=slackware
+
+  if  [ -f "/etc/slackpkg/slackpkg.conf"  ] ; then
+    echo "Slackware build environement detected"  >&2
+    . /etc/slackpkg/slackpkg.conf
+  CROSSDIR=${KITCHEN}/tools
+    EXTDIR=${SOURCESDIR}/extra
+    SRCDIR=${SOURCESDIR}/slackware
+  else
+    PKGDIR=/var/cache/packages
+    EXTDIR=/var/cache/source/extra
+    SRCDIR=/var/cache/source/slackware
+  fi
+     BIN=$(echo ${SRCDIR}/d/binutils/binutils-*.*z)
+#     GCC=$(echo ${SRCDIR}/d/gcc/gcc-*.*.*.*z)
+  KERNEL=$(echo ${SRCDIR}/k/linux-*.*z)
+   GLIBC=$(echo ${SRCDIR}/l/glibc/glibc-*.*.tar.*z)
+   MUSLC=$(echo ${EXTDIR}/l/musl/musl-*.*.tar.*z)
+  PKGHOST=${PKGDIR}/${HOSTTYPE}
+  PKGDEST=${PKGDIR}/${DESTARCH}
+else
+  echo "Generic builder" >&2
+  VENDOR=unknown
+  SRCDIR=${CWD}/dl
+  EXTDIR=${CWD}/dl
+  PKGHOST=${CWD}/out
+  PKGDEST=${CWD}/out
+fi
+
+mkdir -p ${SRCDIR} ${PKGDIR} 
+
+# Seach for source packages ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
+# 
+     BIN=$( echo ${SRCDIR}/d/binutils/binutils-*.*z) ; [ -f ${BIN}    ] ||    BIN=$(echo ${CWD}/dl/binutils-*.*z) ; [ -f ${BIN}    ] ||    BIN="binutils-*.*z ( tested binutils-2.30 )"
+     GCC=$( echo ${SRCDIR}/d/gcc/gcc-?.*.*z)         ; [ -f ${GCC}    ] ||    GCC=$(echo ${CWD}/dl/gcc-*.*z)      ; [ -f ${GCC}    ] ||    GCC="gcc-*.*z      ( tested gcc-7.5.0     )"
+  KERNEL=$( echo ${SRCDIR}/k/linux-*.*z)             ; [ -f ${KERNEL} ] || KERNEL=$(echo ${CWD}/dl/linux-*.*z)    ; [ -f ${KERNEL} ] || KERNEL="linux-*.*z    ( tested linux-4.14.52 )"
+   GLIBC=$( echo ${SRCDIR}/l/glibc/glibc-*.tar.*z)   ; [ -f ${GLIBC}  ] ||  GLIBC=$(echo ${CWD}/dl/glibc-*.tar.*z); [ -f ${GLIBC}  ] ||  GLIBC="glibc-*.*z    ( tested glibc-2.30    )"
+   MUSLC=$( echo ${EXTDIR}/l/musl/musl-?.*.*.tar.*z) ; [ -f ${MUSLC}  ] ||  MUSLC=$(echo ${CWD}/dl/musl-*.tar.*z) ; [ -f ${MUSLC}  ] ||  MUSLC="musl-*.*z     ( tested musl-1.2      )"
+
+echo "">&2
+for ITEM in BIN GCC KERNEL GLIBC MUSLC; do
+  BASE=${ITEM}BASE
+  NAME=${ITEM}VERSION
+
+  if [ -f "${!ITEM}" ] ; then
+    echo  "${ITEM} found as ${!ITEM} "  
+    declare ${NAME}=$(echo $( basename ${!ITEM} | cut -s -d - -f2 | rev | cut -d . -f 3- | rev ))
+    declare ${BASE}=$(echo $( basename ${!ITEM} | cut -s -d - -f1 ));
+  else
+    echo "No ${!ITEM} sources found on ${SRCDIR}/? or ${CWD}/dl">&2  
+    unset VENDOR  # used as flag
+  fi
+
+done
+echo "">&2
+
+if [  -z ${VENDOR} ] ; then
+  echo "Download required sources to ${CWD}/dl or mount the slackware source tree over ${SRCDIR}">&2 
+  exit 1
+fi
+
+# Get the target flags  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
+# 
+
+ARCHES='
+  armv5l armv6l armv7l mips mipsel mips64 mips64el 
+  x86_64 i586 sparc64 
+  powerpc powerpc64 powerpc64le 
+  microblaze microblazeel 
+  sh4 sh4eb nios2 or1k csky
+  riscv64' 
+
+GCCCONF=""; case ${DESTARCH} in
+
+  aarch64) CFLAGS_FOR_TARGET=" -fPIC -DPIC -mcpu=cortex-a53  "
+           GCCCONF=" --with-arch=armv8-a --with-abi=lp64 --with-cpu=cortex-a53  "
+        ;;
+
+   armv5l) CFLAGS_FOR_TARGET=" -fPIC -DPIC -march=armv5te -msoft-float "
+           GCCCONF="--with-arch=armv5te --with-tune=arm926ej-s --with-float=soft --with-mode=arm --with-abi=aapcs-linux"
+        ;;
+
+   armv6l) CFLAGS_FOR_TARGET=" -fPIC -DPIC -march=armv6zk -mhard-float "
+           GCCCONF=" --with-arch=armv6zk --with-tune=arm1176jzf-s --with-fpu=vfp --with-mode=arm --with-float=hard --with-abi=aapcs-linux"
+        ;;
+
+   armv7l) CFLAGS_FOR_TARGET=" -fPIC -DPIC -march=armv7-a -mfpu=vfpv3-d16 -mhard-float "
+           GCCCONF=" --with-mode=thumb --with-float=hard --with-pic --with-abi=aapcs-linux  --with-arch=armv7-a --with-fpu=vfpv3-d16"
+        ;;
+
+mips|mipsel) CFLAGS_FOR_TARGET=" -fPIC -DPIC  -mhard-float -march=mips32r2 "
+           GCCCONF=" --with-arch=mips32r2 --with-abi=32  --with-float=hard "
+        ;;
+
+mips64|mips64el) CFLAGS_FOR_TARGET="  -fPIC -DPIC -soft-float -march=mips3 "
+           GCCCONF=" --with-arch=mips3 --with-tune=mips64 --with-mips-plt --with-float=soft --with-abi=64 "
+        ;;
+
+   x86_64) CFLAGS_FOR_TARGET=" -fPIC -DPIC "
+           GCCCONF=""
+        ;;
+
+     i586) CFLAGS_FOR_TARGET=" -fPIC -DPIC -march=i586 -mtune=i586"
+        ;;
+
+      sparc) CFLAGS_FOR_TARGET=" -mcpu=v9 "
+             GCCCONF="  --with-cpu=v9 "
+      ;;
+
+    sparc64) CFLAGS_FOR_TARGET=" -mcpu=ultrasparc "
+             GCCCONF="--with-cpu=ultrasparc"
+          ;;
+
+    powerpc)  GCCCONF="  --with-cpu=7400  --enable-secureplt --enable-decimal-float=no "
+             CFLAGS_FOR_TARGET=" "
+          ;;
+
+  powerpc64) GCCCONF="  --with-cpu=powerpc64  --with-float=hard --with-abi=elfv2 --enable-secureplt --enable-decimal-float=no --enable-targets=powerpcle-linux,powerpc-linux"
+             CFLAGS_FOR_TARGET=" -mcpu=powerpc64 -mhard-float  "
+          ;;
+
+ powerpc64le) GCCCONF=" --with-cpu=power8  --with-float=hard --with-abi=elfv2 --enable-secureplt --enable-decimal-float=no --enable-targets=powerpcle-linux,powerpc-linux"
+              CFLAGS_FOR_TARGET=" -mcpu=power8 -mhard-float  "
+           ;;
+
+microblaze|microblazeel) 
+              GCCCONF="   "
+              CFLAGS_FOR_TARGET="  "
+           ;;
+
+         sh4|sh4eb|nios2|or1k|csky)
+              GCCCONF="   "
+              CFLAGS_FOR_TARGET="  "
+           ;;
+
+    riscv32) GCCCONF=" --with-arch=rv64imafd --with-abi=lp32d "
+             CFLAGS_FOR_TARGET=" -march=rv32imafd"
+          ;;
+
+    riscv64) GCCCONF=" --with-arch=rv64imafd --with-abi=lp64d "
+             CFLAGS_FOR_TARGET=" -march=rv64imafd"
+          ;;
+
+           *) echo "You must define an architecture ( ${ARCHES} )" >&2;
+              exit
+  ;;
+esac
+
+CFLAGS_FOR_TARGET+=" -O3 -g0 -Wno-error=cast-qual"
+
+
+#
+#  Emerge ABI's ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+# Arrange flags for host builder
+#
+HOSTABI="gnu"; HOSTLANG=",ada"; case ${HOSTTYPE} in
+        arm*l) HOSTABI="gnueabihf" ;;
+     mips64el) HOSTABI=gnueabi64   ;;
+ #        *86*) HOSTLANG+=,"brig"   ;;  
+esac
+#
+ADDL=",fortran,ada"; ABI=""; MUSARCH="${DESTARCH}"; GNUARCH="${DESTARCH}"; SUFFIX=${DESTARCH}; case "${DESTARCH}" in
+         *86) KERNELARCH="i386"    ;  SUFFIX=i386                               ;;
+      armv5l) KERNELARCH="arm"     ;  SUFFIX=arm;     ABI=eabi  ; MUSARCH=arm   ;;
+       armv*) KERNELARCH="arm"     ;  SUFFIX=arm;     ABI=eabihf; MUSARCH=armhf ;;
+     aarch64) KERNELARCH="arm64"   ;;
+      mipsel) KERNELARCH="mips"    ;;
+    mips64el) KERNELARCH="mips"    ;  SUFFIX=mips64el; ABI=eabi64;;
+       nios2) KERNELARCH="nios2"   ;  ADDL='';                MUSARCH=""        ;;
+     powerpc) KERNELARCH="powerpc" ;;
+  powerpc64*) KERNELARCH="powerpc" ;                          MUSARCH=powerpc64 ;;
+      riscv*) KERNELARCH="riscv"   ;;
+        or1k) KERNELARCH="openrisc"  ; ADDL=',fortran';             GNUARCH=""  ;;
+      sparc*) KERNELARCH="sparc"                                    MUSARCH=""  ;;
+        csky) KERNELARCH="csky"      ; ADDL=',fortran';  ABI=abiv2; MUSARCH=""  ;;
+        sh4*) KERNELARCH="sh"        ;                                          ;;
+ microblaze*) KERNELARCH="microblaze"; ADDL='' ;;
+
+           *) KERNELARCH=${DESTARCH} ;;
+esac
+
+#
+case "$DESTARCH" in
+  *64*) LIBWIDE=lib64;;
+     *) LIBWIDE=lib;;
+esac
+
+   BUILD="${HOSTTYPE}-native-linux-${HOSTABI}"
+    HOST="${HOSTTYPE}-${VENDOR}-linux-${HOSTABI}"
+   MUSLT="${DESTARCH}-${VENDOR}-linux-musl${ABI}"
+  ELFTGT="${DESTARCH}-${VENDOR}-linux-gnu${ABI}"
+  TARGET="${DESTARCH}-${VENDOR}-linux-gnu${ABI}"
+  TGTBIN=$( echo ${TARGET} | sed -e 's/microblazebe/microblaze/' )
+
+#
+# Formally name the required packages ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+
+
+if [ -x "$( which makepkg )" ] ; then
+
+  PKGCRBIN=${PKGHOST}/d
+  PKG_C_GN=${PKGHOST}/d
+  PKG_C_ML=${PKGHOST}/d
+#  PKG_C_LF=${PKGHOST}/d
+  PKGLINUX=${PKGDIR}/${KERNELARCH}/k
+  PKGGLIBC=${PKGDIR}/noarch/l
+  PKGMUSLC=${PKGDIR}/noarch/l
+
+  makePkg()
+  { if [ -e "${1}" ]; then
+      echo "${1} yet created from ${INSTPKG}">&2
+    else
+      cd ${INSTPKG} || exit 3
+      echo "Stripping ${INSTPKG}">&2
+      find . | xargs file | grep "executable"    | grep ELF | cut -f 1 -d : | xargs strip --strip-unneeded 2> /dev/null
+      find . | xargs file | grep "shared object" | grep ELF | cut -f 1 -d : | xargs strip --strip-unneeded 2> /dev/null
+      echo "Creating ${1} from ${INSTPKG}">&2
+      find . -type l | tar -cf ../backup-links.tar -T -
+        makepkg -l y -c n "${1}"
+      tar -xf ../backup-links.tar
+      cd -
+    fi
+  }
+
+  managePkg()
+  { if [ -e "${ROOT}/${2}" ]; then
+      echo "${1} yet installed over ${ROOT}">&2
+    else
+      echo "Installing ${1} over ${ROOT}">&2
+      ROOT=${ROOT}; installpkg ${1}
+      exit
+    fi
+  }
+else
+  PKGCRBIN=${PKGHOST}
+  PKG_C_GN=${PKGHOST}
+  PKG_C_ML=${PKGHOST}
+#  PKG_C_LF=${PKGHOST}
+  PKGLINUX=${PKGDEST}
+  PKGGLIBC=${PKGDEST}
+  PKGMUSLC=${PKGDEST}
+
+  makePkg()
+  { if [ -e "${1}" ]; then
+      echo "${1} yet created from ${INSTPKG}">&2
+    else
+      cd ${INSTPKG};
+      echo "Stripping ${INSTPKG}">&2
+      find . | xargs file | grep "executable"    | grep ELF | cut -f 1 -d : | xargs strip --strip-unneeded 2> /dev/null
+      find . | xargs file | grep "shared object" | grep ELF | cut -f 1 -d : | xargs strip --strip-unneeded 2> /dev/null
+      echo "Creating ${1} from ${INSTPKG}">&2
+      tar -cf "${1}" .
+      cd -
+    fi
+  }
+
+  managePkg()
+  { if [ -e "${ROOT}/${2}" ]; then
+      echo "${1} yet installed over ${ROOT}">&2
+    else
+      echo "Installing ${1} over ${ROOT}">&2
+      cd ${ROOT}; tar -xf "${1}" ; cd -
+    fi
+  }
+
+fi
+
+for ITEM in PKGCRBIN PKG_C_GN PKG_C_ML PKGLINUX PKGGLIBC PKGMUSLC; do
+  mkdir -p ${!ITEM}
+done
+
+PKGCRBIN+=/cross-bin-${DESTARCH}-${BINVERSION}-${HOSTTYPE}-0.txz
+PKG_C_GN+=/cross-gcc-${DESTARCH}+gnu-${GCCVERSION}-${HOSTTYPE}-0.txz
+PKG_C_ML+=/cross-gcc-${DESTARCH}+musl-${GCCVERSION}-${HOSTTYPE}-0.txz
+# PKG_C_LF+=/cross-gcc-${DESTARCH}-${GCCVERSION}-${HOSTTYPE}-0.txz
+PKGLINUX+=/linux-headers-${KERNELVERSION}-${KERNELARCH}-0.txz
+PKGGLIBC+=/cross-glibc-${GLIBCVERSION}-${DESTARCH}-0.txz
+PKGMUSLC+=/cross-musl-${MUSLCVERSION}-${DESTARCH}-0.txz
+
+
+echo "">&2
+echo "/====================================== SUMMARY  =====================================">&2
+echo "| ">&2
+echo "|     BIN: ${BINVERSION}     GCC: ${GCCVERSION}">&2
+echo "|  KERNEL: ${KERNELVERSION}   GLIBC: ${GLIBCVERSION}    MUSL: ${MUSLCVERSION}">&2
+echo "| ">&2
+echo "|  TARGET: ${DESTARCH} ">&2
+echo "|   FLAGS: ${CFLAGS_FOR_TARGET} ">&2
+echo "|     GCC: ${GCCCONF} ">&2
+echo "| ">&2
+echo "|  BINUTILS: ${PKGCRBIN}">&2
+echo "| GCC  PACK: ${PKG_C_GN}">&2
+echo "| GCC  MUSL: ${PKG_C_ML}">&2
+echo "| HDRS PACK: ${PKGLINUX}">&2
+echo "| LIBC PACK: ${PKGGLIBC}">&2
+echo "| MUSL PACK: ${PKGMUSLC}">&2
+echo "| ">&2
+echo "|      HOST: ${HOST}">&2
+echo "|    TARGET: ${TARGET}">&2
+echo "|      MUSL: ${MUSLT}">&2
+echo "| ">&2
+echo "/=====================================================================================">&2
+
+PATH=${CROSSDIR}/bin:/usr/bin:/bin:/sbin
+BINUTILS="as ld ar ranlib nm objcopy objdump readelf size strip strings"
+
+
+# Extract Neded sources ( and patch gcc once untarred), ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+cd ${CWD}; for ITEM in BIN GCC KERNEL GLIBC MUSLC; do
+  NAME=${ITEM}BASE
+  TARFILE=${!ITEM}
+  declare ${NAME}=$(echo $( basename ${TARFILE} | cut -s -d - -f2 | rev | cut -d . -f 3- | rev )); VERSION=${!NAME}
+  declare ${NAME}=$(echo $( basename ${TARFILE} | cut -s -d - -f1 )); BASE=${!NAME}; FOLDER=${BASE}-${VERSION}
+
+  if [ -d "${FOLDER}" ] ; then
+    echo "${BASE} ${VERSION} yet expanded">&2
+  else
+    if [ -f "${TARFILE}" ]; then
+      echo "Expanding ${BASE} ${VERSION}">&2
+      tar -xf ${TARFILE}
+
+      case ${BASE} in
+        gcc)
+#   Make possible to have default linker and assembler in another place that build machine
+# In a cross compiling, the build machine has not the alien linker in place, generally.
+# Another option is to taint the root filesystem.
+#
+          cd  ${CWD}/${BASE}-${VERSION}/gcc/ 
+      # v 7.5     gcc/ada/gcc-interface/Makefile.in # From me
+            sed -i 's\linux-gnueabi\linux\'  ada/Makefile.rtl || exit 45 # From me
+
+            for ITEM in $( find config/ -name t*-* ); do
+              sed -e 's#../lib64#.#' \
+                  -e 's#-linux-gnu#-linux-$(LIBCTYPE)#g' \
+                  -i ${ITEM} || exit 45 # from linuxfromscratch, more or less
+
+              if [ "$( grep MULTIARCH_DIRNAME ${ITEM} )" == "" ] ; then
+                echo 'MULTIARCH_DIRNAME = $(call if_multiarch,$(SUFFIX)-linux-$(LIBCTYPE))' >> ${ITEM}
+              fi 
+            done
+#
+# Same thing: ( 2º avoid fixincludes, from linux from scratch ) 
+#
+            sed -e 's|if \$(MULTILIB_OSDIRNAMES),,\$(MULTIARCH_DIRNAME)|SUFFIX)-linux-\$(LIBCTYPE|' \
+                -e 's@\./fixinc\.sh@-c true@' \
+                -e 's|PREPROCESSOR_DEFINES =|PREPROCESSOR_DEFINES = -DARCHSUFFIX=\\\"$(LIBDIRSUFFIX)\\\" |' \
+                -e 's#gcc.o += $(DRIVER_DEFINES)#gcc.o += -DSTANDARD_STARTFILE_PREFIX_1=\\\"/usr/lib$(LIBDIRSUFFIX)/\\\" -DSTANDARD_STARTFILE_PREFIX_2=\\\"/lib$(LIBDIRSUFFIX)/\\\" $(DRIVER_DEFINES)#' \
+                -i Makefile.in || exit 45
+
+# From: Andreas Schwab <schwab at suse dot de>
+#
+            sed -e 's|IN_LIBGCC2|USED_FOR_TARGET|g' -i config/nios2/nios2.h || exit 45
+
+# GCC stubbornness
+#
+            sed -e 's/test ! -x "$DEFAULT_LINKER"/false/' -e 's/test ! -x "$DEFAULT_ASSEMBLER"/false/' -i configure || exit 45 
+
+# sh4 does not get multiarch
+#           sed -e '/#ifdef NATIVE_SYSTEM_HEADER_DIR/i #ifdef ARCH_INCLUDE_DIR\n{ ARCH_INCLUDE_DIR, NATIVE_SYSTEM_HEADER_COMPONENT, 0, 0, 1, 0 },\n#endif\n' \
+            sed -e 's|INCLUDE_DEFAULTS|INCLUDE_DEFAULTS_JACS|' \
+                -e 's|LOCAL_INCLUDE_DIR, 0, 0, 1, 1, 2|LOCAL_INCLUDE_DIR ARCHSUFFIX, 0, 0, 1, 1, 0|' \
+                -e 's|NATIVE_SYSTEM_HEADER_DIR, NATIVE_SYSTEM_HEADER_COMPONENT, 0, 0, 1, 2|NATIVE_SYSTEM_HEADER_DIR ARCHSUFFIX, NATIVE_SYSTEM_HEADER_COMPONENT, 0, 0, 1, 0|' \
+                -i cppdefault.c || exit 45
+          cd -  
+
+# Breaks native builds built as crossed
+#
+          cd ${FOLDER}/libdecnumber
+             ln -s dpd no || exit 5   
+          cd - 
+        ;;
+      esac
+    fi
+  fi
+done
+
+#  Generate triplet compatible names ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+GNATX="gnat gnatbind gnatchop gnatclean gnatfind gnatkr gnatlink gnatls gnatmake gnatname gnatprep gnatxref"
+
+if [ -d "${CROSSDIR}/bin" ] ; then
+  echo "Tripleted binaries yet generated on ${CROSSDIR}/bin">&2
+else
+  echo "Generating Tripleted binaries on  ${CROSSDIR}/bin">&2
+  mkdir -p ${CROSSDIR}/bin; cd ${CROSSDIR}/bin
+
+  for FILE in ld as ar gcc-ar gcc g++ c++ nm gcc-nm objcopy objdump ranlib gcc-ranlib readelf strip cpp ${GNATX} strings patchelf; do
+    GUESS=`echo /usr/bin/${HOSTTYPE}-*-linux-${HOSTABI}-${FILE} | cut -d ' ' -f 1`
+    if [ -e "${GUESS}"  ] ; then
+      ln -sf "${GUESS}" ${HOST}-${FILE} 2>/dev/null
+    elif [ -e "/usr/bin/${FILE}"  ] ; then
+      ln -sf /usr/bin/${FILE} ${HOST}-${FILE}
+    else
+      echo "/usr/bin/${FILE} non usable as ${HOST}-${FILE}"
+    fi
+  done
+
+  ln -s /usr/bin/patchelf || exit 12
+
+  for FILE in ar gcc-ar gcc g++ objcopy objdump strings ar ranlib cpp strip ${GNATX} ; do
+    ln -s ${HOST}-${FILE} ${FILE} 2>/dev/null # GNAT does not know about multi cross copile system
+  done
+
+  cd -
+
+  cd ${KITCHEN}/bin
+    for ITEM in $( ls ${CROSSDIR}/bin/gnat* ); do
+      ln -s ${ITEM}
+    done
+  cd -
+fi
+
+GCCCONF+='
+  --disable-gtk-doc 
+  --disable-gtk-doc-html 
+  --disable-doc 
+  --disable-docs 
+  --disable-documentation 
+  --disable-debug 
+  --with-xmlto=no 
+  --with-fop=no 
+  --disable-nls 
+'
+
+#echo "SETPOINT 1 b $ORGDIRSUFFIX">&2 ; exit
+
+# Build native versioned gcc. Ada needs this ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+cd ${CWD}; if [ -x "${CROSSDIR}/bin/${BUILD}-gcc" ] ; then 
+  echo "base gcc ${GCCVERSION} yet preinstalled on ${INSTPKG}">&2
+else
+  if [ -f "gcc-${GCCVERSION}/native-build/gcc/gnat" ] ; then
+    cd "gcc-${GCCVERSION}/native-build"
+  else
+    mkdir "gcc-${GCCVERSION}/native-build"
+    cd    "gcc-${GCCVERSION}/native-build"
+    echo "Configuring base GCC for ${CROSSDIR} in ${PWD} ">&2
+
+   #  the CFLAGS include allows the multiarch .. monoarch build
+    ORGDIRSUFFIX=$( realpath $( dirname $( ${CROSSDIR}/bin/${HOST}-gcc -print-file-name=libc.a ))  | sed -e 's|/usr||' | sed -e 's|/lib||' )
+     ../configure  --disable-bootstrap --prefix=${CROSSDIR} \
+        CFLAGS=" -O3 -g0 -Wno-error=cast-qual" CXX_FLAGS=" -O3 -g0 -Wno-error=cast-qual " \
+        --build=${HOST} --host=${HOST} --target=${HOST} --program-prefix=${BUILD}- \
+        --libdir=/usr/lib/${ORGDIRSUFFIX}                           \
+        --with-gxx-include-dir=//${CROSSDIR}/include/c++/${GCCVERSION} \
+        --enable-languages=c,c++,objc,lto${HOSTLANG} \
+        --with-ld=${CROSSDIR}/bin/${HOST}-ld              \
+        --with-as=${CROSSDIR}/bin/${HOST}-as              \
+        --without-isl                                      \
+        --enable-checking=no                               \
+        --disable-multilib --enable-multiarch               \
+        --disable-libquadmath --disable-libquadmath-support \
+        --disable-libunwind-exceptions       \
+        --enable-__cxa_atexit                \
+        --disable-install-libiberty          \
+        --with-linker-hash-style=gnu         \
+        --with-pkgversion="Slackware-14.3"   \
+        --disable-install-libiberty          \
+        --disable-libssp                     \
+        --disable-gtktest                    \
+        --without-cloog                      \
+        --disable-decimal-float              \
+        --disable-debug                  \
+        --disable-libstdcxx-pch          \
+        --disable-threads                \
+        --enable-clocale=gnu             \
+        --disable-libsanitizer --with-sysroot="/" > /dev/null || exit 5
+    echo "Building versioned gcc for ${HOSTTYPE} ">&2
+    make ${WORKERS} LIBDIRSUFFIX=${ORGDIRSUFFIX} > /dev/null  || make V=1 LIBDIRSUFFIX=${ORGDIRSUFFIX} || exit 1
+  fi
+  echo "Installing host (${HOSTTYPE}) VERSIONED GCC">&2
+  make install >/dev/null || exit 14
+
+  cd ${KITCHEN}/bin
+    for ITEM in $( ls ${CROSSDIR}/bin/${BUILD}-* ); do
+      ln -s ${ITEM} $( basename $( echo ${ITEM} | sed -e "s/native/${VENDOR}/" )) || exit 45
+    done
+  cd -
+
+  cd ${CROSSDIR}/bin/ 
+    for ITEM in $( ls ${BUILD}-* ); do
+      ln -sf ${ITEM} $( basename $( echo ${ITEM} | sed -e "s/native/${VENDOR}/" )) || exit 45
+    done
+    for ITEM in $( ls gnat* ); do
+      ln -sf ${BUILD}-${ITEM} ${ITEM}
+    done
+  cd -
+fi
+
+
+#echo "SETPOINT 2">&2 ; exit
+
+# Build target binutils ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+INSTPKG=${KITCHEN}/${DESTARCH}/binutils
+
+
+cd ${CWD}; if [ -x "${INSTPKG}/usr/bin/${TARGET}-ld" ] ; then
+  echo "cross binutils ${BINVERSION} yet installed on ${KITCHEN}/crossbin for ${SYSROOT}">&2
+else
+  if [ -f "binutils-${BINVERSION}/${BUILDFOLDER}/Makefile" ] ; then
+    cd "binutils-${BINVERSION}/${BUILDFOLDER}" || exit 5
+  else
+    mkdir "binutils-${BINVERSION}/${BUILDFOLDER}"
+    cd    "binutils-${BINVERSION}/${BUILDFOLDER}"
+    echo "Configuring target BIN">&2
+     ../configure  ${BINCONF} --prefix=/usr  --build=${HOST} --host=${HOST} --target=${TGTBIN} \
+       --libdir=/usr/lib/${SUFFIX}-linux-gnu${ABI}  \
+       --with-gnu-ld                 \
+       --with-gnu-as                 \
+       --disable-gtk-doc --disable-gtk-doc-html --disable-doc --disable-docs --disable-documentation  \
+       --with-xmlto=no               \
+       --disable-debug               \
+       --disable-dependency-tracking \
+       --disable-nls                 \
+       --enable-poison-directories   \
+       --enable-static --enable-shared \
+       --with-lib-path=/usr/local/lib/${SUFFIX}-linux-gnu${ABI}:/usr/lib/${SUFFIX}-linux-gnu${ABI}:/lib/${SUFFIX}-linux-gnu${ABI} \
+       --with-build-time-tools=${CROSSDIR}/bin >/dev/null || exit 6
+    echo "Building ${TARGET} BINUTILS over ${HOST} build system">&2
+    make ${WORKERS} > /dev/null || make V=1 ||  exit 13
+  fi
+    
+  echo "Installing target cross (${TARGET}) BINUTILS">&2
+  rm -rf ${INSTPKG}
+  make DESTDIR=${INSTPKG} install > /dev/null || exit 22
+
+  mkdir -p ${INSTPKG}/usr/${TARGET}/bin
+  mkdir -p ${INSTPKG}/usr/${TARGET}/lib/${SUFFIX}-linux-gnu${ABI}
+  mkdir -p ${INSTPKG}/lib/${SUFFIX}-linux-gnu${ABI}
+  mv       ${INSTPKG}/usr/${LIBWIDE}/lib*.* ${INSTPKG}/lib/${SUFFIX}-linux-gnu${ABI}
+  rmdir    ${INSTPKG}/usr/${LIBWIDE}
+
+  cd ${INSTPKG}/usr/bin
+    for ITEM in $( ls ); do
+      EXE=$( echo ${ITEM} | rev | cut -d - -f 1 | rev )
+      mv ${ITEM} ../${TARGET}/bin/${EXE} 2>/dev/null
+      ln -sf ../${TARGET}/bin/${EXE} ${TARGET}-${EXE}
+      ln -sf ../${TARGET}/bin/${EXE} ${MUSLT}-${EXE} 
+      ln -sf ../${TARGET}/bin/${EXE} ${ELFTGT}-${EXE} 
+    done
+  cd -
+
+#
+# Create the recently created package
+#
+  echo "Creating cross bin ${PKGCRBIN} package on ${INSTPKG} ">&2
+  makePkg ${PKGCRBIN} ${INSTPKG}
+
+#  Give access to current build
+#
+  echo "Giving access to temporary located utils to its libs">&2
+  cd ${CROSSDIR}/bin
+    for ITEM in $( ls ${INSTPKG}/usr/bin/* ); do
+      ITEM=$( realpath ${ITEM} )
+      ${CROSSDIR}/bin/patchelf --set-rpath ${INSTPKG}/usr/${HOST}/${TGTBIN}/lib ${ITEM} 2>/dev/null
+      ln -sf ${ITEM} ${TARGET}-$( basename ${ITEM} )
+      ln -sf ${ITEM} ${MUSLT}-$(  basename ${ITEM} )
+      ln -sf ${ITEM} ${ELFTGT}-$( basename ${ITEM} )
+    done
+  cd -
+fi
+
+#echo "SETPOINT 3 ${CROSSDIR}/lib/gcc/${TARGET}/${GCCVERSION}/libgcc.a">&2 ; exit
+
+# Build glibc BOOTSTRAP GCC HOST ( No GLIBC ) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+
+MAKEADDFLAGS="LIBDIRSUFFIX=/${SUFFIX}-linux-${LIBCTYPE}${ABI}" 
+INSTPKG=${KITCHEN}/${DESTARCH}/finale/elf
+cd ${CWD}; if [ -f "${INSTPKG}/usr/lib/gcc/${ELFTGT}/${GCCVERSION}/libgcc.a" ] ; then
+  echo "cross bootstrap GCC for ${DESTARCH} yet installed on ${CROSSDIR}">&2
+else
+  if [ -f "gcc-${GCCVERSION}/${BUILDFOLDER}/Makefile" ] ; then
+    cd "gcc-${GCCVERSION}/${BUILDFOLDER}"
+  else
+    mkdir "gcc-${GCCVERSION}/${BUILDFOLDER}";
+    cd    "gcc-${GCCVERSION}/${BUILDFOLDER}"
+    echo "Configuring GCC BOOTSTRAP for ${ELFTGT} ... ">&2
+    ../configure ${GCCCONF} \
+      --target=${ELFTGT} --build=${BUILD} --host=${BUILD} \
+      --prefix=/usr                          \
+      --with-gnu-ld --with-ld=/usr/bin/${TARGET}-ld \
+      --with-gnu-as --with-as=/usr/bin/${TARGET}-as \
+      --enable-languages=c,c++                     \
+      --disable-libquadmath                    \
+      --with-newlib                            \
+      --disable-largefile                      \
+      --disable-debug                          \
+      --disable-dependency-tracking            \
+      --disable-nls                            \
+      --with-sysroot=${SYSROOT}                \
+      --disable-libunwind-exceptions           \
+      --without-headers                        \
+      --disable-shared                         \
+      --disable-threads                        \
+      --disable-libatomic                      \
+      --disable-libgomp                        \
+      --disable-libmpx                         \
+      --disable-libvtv                         \
+      --disable-libstdcxx                      \
+      --disable-install-libiberty              \
+      --enable-__cxa_atexit --disable-libssp   \
+      --disable-decimal-float                  \
+      --without-zstd                           \
+      --disable-libmpx                         \
+      --disable-libquadmath --disable-libquadmath-support \
+      --disable-libsanitizer --enable-tls      \
+      --without-isl  --without-cloog           \
+      --disable-multilib    > /dev/null || exit 5
+    echo "Building BOOTSTRAP HOST from ${HOSTTYPE} to ${ELFTGT} ">&2
+    make ${MAKEADDFLAGS} ${WORKERS} all-gcc           > /dev/null || make ${MAKEADDFLAGS} V=1 all-gcc           || exit 2
+    make ${MAKEADDFLAGS} ${WORKERS} all-target-libgcc > /dev/null || make ${MAKEADDFLAGS} V=1 all-target-libgcc || exit 3
+  fi
+  echo "Installing BOOTSTRAP gcc from ${HOSTTYPE} to ${DESTARCH} over ${CROSSDIR}  ">&2
+  make DESTDIR=${INSTPKG}  install-gcc           > /dev/null || exit 12 > /dev/null 
+  make DESTDIR=${INSTPKG}  install-target-libgcc > /dev/null || exit 13 > /dev/null 
+
+#  cd ${INSTPKG}/usr/libexec/gcc/${ELFTGT}/${GCCVERSION}/
+#    for ITEM in ${BINUTILS}; do
+#      ln -sf ../../../../bin/${TARGET}-${ITEM} ${ITEM}
+#    done
+#  cd -
+#
+#  cd ${INSTPKG}
+#    makePkg ${PKGGLIBC} ${INSTPKG}
+#  cd -
+#
+  cd ${INSTPKG}/usr/libexec/gcc/${ELFTGT}/${GCCVERSION}/
+    for ITEM in ${BINUTILS}; do
+    ln -sf ${CROSSDIR}/bin/${TARGET}-${ITEM} ${ITEM}
+    done
+  cd -
+
+fi
+  cd ${CROSSDIR}/bin
+    for ITEM in $(ls ${INSTPKG}/usr/bin/${ELFTGT}-* ); do
+      EXE=$( echo ${ITEM} | rev | cut -d - -f 1 | rev )
+      ln -s ${ITEM} ${MUSLT}-${EXE}  2>/dev/null
+      ln -s ${ITEM} ${TARGET}-${EXE} 2>/dev/null
+    done
+  cd -
+
+
+# echo "SETPOINT 4">&2 ; exit
+
+
+#
+# Install KERNEL HEADERS, keep in mind multiarch and multiarch features ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+cd ${CWD}; INSTPKG=${KITCHEN}/${KERNELARCH}/linux
+if [ -d "${INSTPKG}/usr/include" ] ; then   # Not created, about to create
+  echo "Kernel headers package created over ${INSTPKG} ">&2
+else
+  echo "Installing linux ${KERNELVERSION} ${KERNELARCH} over ${INSTPKG}">&2
+  cd  "linux-${KERNELVERSION}"
+    rm -rf ${INSTPKG}
+          make HOSTCC=${CROSSDIR}/bin/${HOST}-gcc \
+        CROSS_COMPILE=${CROSSDIR}/bin/${TARGET}- \
+                 ARCH=${KERNELARCH} \
+    INSTALL_HDR_PATH=${INSTPKG}/usr/include/incoming headers_install >/dev/null || exit 123
+  # You won't want these files. The ones in libdrm work better. (From  Volkerding)
+    rm -rf drm
+    find  ${INSTPKG} -name ".install"      | xargs rm
+    find  ${INSTPKG} -name "..install.cmd" | xargs rm
+    mkdir                                           ${INSTPKG}/usr/include/linux-${KERNELARCH}/  
+    mv    ${INSTPKG}/usr/include/incoming/include/* ${INSTPKG}/usr/include/linux-${KERNELARCH}/
+    rmdir ${INSTPKG}/usr/include/incoming/include
+    rmdir ${INSTPKG}/usr/include/incoming/
+
+    echo "Creating cross kernel headers for ${KERNELARCH} ${PKGLINUX} package on ${INSTPKG} ">&2
+    makePkg ${PKGLINUX} ${INSTPKG}
+  cd -
+fi
+
+#echo "SETPOINT 5">&2 ; exit
+
+#
+#   Build glibc  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+# includes will be installed on /usr/${TARGET}/include for cross purposes
+# links to /usr/include/linux-${ARCH}/??? because these are shared among tuples
+#
+        #--enable-kernel=${KERNELVERSION} \
+      #  --enable-obsolete-nsl        \
+      #  --enable-obsolete-rpc        \
+
+
+cd ${CWD}; if [ -n "${GNUARCH}" ] ; then
+  LIBCLIST+=" gnu"
+  INSTPKG=${KITCHEN}/${DESTARCH}/gnu
+ cd ${CWD}; if [ -d "${INSTPKG}/usr" ] ; then # Not created, about to create
+    echo "glibc ${PKGGLIBC} package created from ${INSTPKG} ">&2
+  else
+    echo "Configuring GLIBC ${GLIBCVERSION}">&2
+    mkdir -p "glibc-${GLIBCVERSION}/${BUILDFOLDER}"; cd "glibc-${GLIBCVERSION}/${BUILDFOLDER}"
+    CFLAGS=" --sysroot=${INSTPKG} ${CFLAGS_FOR_TARGET} " \
+    ../configure --host=${TARGET} --target=${TGTBIN} --build=${BUILD} --prefix=/usr  \
+        --with-headers=${KITCHEN}/${KERNELARCH}/linux/usr/include/linux-${KERNELARCH}  \
+        --libdir=/usr/lib/${SUFFIX}-linux-gnu${ABI} \
+        --enable-kernel=4.4.0 \
+        --disable-werror \
+        --with-fp                    \
+        --enable-add-ons             \
+        --disable-profile            \
+        --with-tls                   \
+        --with-__thread              \
+        --without-cvs                \
+        --with-build-time-tools=${KITCHEN}/bootstrap/bin  > /dev/null || exit 5
+    make ${WORKERS} > /dev/null && make V=1 > /dev/null ;
+    echo "Installing GLIBC ${GLIBCVERSION} on ${INSTPKG}" >&2
+    rm -rf ${INSTPKG}
+    make DESTDIR=${INSTPKG} install > /dev/null || exit 1
+
+# JACS, move stuff in /lib, and link unroll not honoring libdirsuffix
+#
+   mv ${INSTPKG}/lib/${SUFFIX}-linux-gnu${ABI}/*.so  ${INSTPKG}/usr/lib/${SUFFIX}-linux-gnu${ABI}
+
+    mkdir -p ${INSTPKG}/lib/${SUFFIX}-linux-gnu${ABI}
+    for ITEM in $( ls  ${INSTPKG}/${LIBWIDE}/lib*.so ) ; do
+      BASE=$(basename ${ITEM} "-${GLIBCVERSION}.so" )
+      BASE=$( echo    ${INSTPKG}/${LIBWIDE}/${BASE}.so.? )
+      DEST=$(basename ${BASE}  | rev | cut -d . -f 2- | rev )
+
+      mv ${ITEM}  ${INSTPKG}/lib/${SUFFIX}-linux-gnu${ABI}
+      if  [ -f ${BASE} ]; then
+        mv ${BASE} ${INSTPKG}/lib/${SUFFIX}-linux-gnu${ABI}
+     fi
+
+      cd ${INSTPKG}/usr/lib/${SUFFIX}-linux-gnu${ABI}
+        if [ "$( file -b ${DEST} )" == "ASCII text" ]; then
+          sed -i -e "s#/lib64/lib#/lib/${SUFFIX}-linux-gnu${ABI}/lib#g" -e "s#/lib/lib#/lib/${SUFFIX}-linux-gnu${ABI}/lib#g" ${DEST}
+        else
+          ln -sf ../../../lib/${SUFFIX}-linux-gnu${ABI}/$(basename ${BASE}) ${DEST}
+        fi
+      cd -
+    done
+
+    mv ${INSTPKG}/${LIBWIDE}/lib*.so*  ${INSTPKG}/lib/${SUFFIX}-linux-gnu${ABI}
+
+# Add multiarch support
+#
+    mv ${INSTPKG}/usr/include ${INSTPKG}/usr/${SUFFIX}-linux-gnu${ABI}        # allow cross scheme
+    mkdir ${INSTPKG}/usr/include
+    mv    ${INSTPKG}/usr/${SUFFIX}-linux-gnu${ABI} ${INSTPKG}/usr/include  
+
+    cd  ${INSTPKG}/usr/include/${SUFFIX}-linux-gnu${ABI}
+      for ITEM in asm asm-generic drm linux misc mtd rdma sound video xen  ; do
+          mv ${ITEM} ${ITEM}.glibc
+          ln -sf ../linux-${KERNELARCH}/${ITEM}
+      done
+    cd -
+
+    mkdir                    ${INSTPKG}/usr/${TARGET}/bin
+    mv ${INSTPKG}/sbin/*     ${INSTPKG}/usr/${TARGET}/bin   # taints root fs
+    mv ${INSTPKG}/usr/bin/*  ${INSTPKG}/usr/${TARGET}/bin   # taints root fs
+    mv ${INSTPKG}/usr/sbin/* ${INSTPKG}/usr/${TARGET}/bin   # taints root fs
+
+    rmdir ${INSTPKG}/usr/sbin  ${INSTPKG}/sbin  ${INSTPKG}/usr/bin
+
+#   Save symlinks removed for makePkg for temporal build
+# and restore it once packager ends
+#   
+    cd ${INSTPKG}
+      makePkg ${PKGGLIBC} ${INSTPKG}
+    cd -
+
+    cd ${INSTPKG}/usr/include/${SUFFIX}-linux-gnu${ABI}
+      for ITEM in $( ls -d ${KITCHEN}/${KERNELARCH}/linux/usr/include/linux-${KERNELARCH}/* ) ; do
+       ln -sf ${ITEM}
+      done
+    cd -
+  fi
+fi
+
+#echo "SETPOINT 6">&2 ; exit
+
+#
+#   Build muslc  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+cd ${CWD}; if [ -n "${MUSARCH}" ] ; then
+  LIBCLIST+=" musl"
+  INSTPKG=${KITCHEN}/${DESTARCH}/musl/
+  if [ -d "${INSTPKG}/usr/include" ] ; then # Not created, about to create
+    echo "mulsc ${PKGMUSLC} package created from ${INSTPKG} ">&2
+  else
+    if [ -e "musl-${MUSLCVERSION}/${BUILDFOLDER}/lib/libc.a" ] ; then
+      echo "musl ${MUSLCVERSION} yet built">&2
+    else
+      echo "Configuring musl ${MUSLCVERSION}">&2
+      mkdir musl-${MUSLCVERSION}/${BUILDFOLDER}
+      cd "musl-${MUSLCVERSION}/${BUILDFOLDER}" 
+      CC=${TARGET}-gcc \
+      CROSS_COMPILE=${TARGET}- \
+      CFLAGS=${CFLAGS_FOR_TARGET} \
+      ../configure  --target=${MUSLT} --host=${MUSLT} --build=${BUILD} --prefix=/usr  \
+        --libdir=usr/lib/${SUFFIX}-linux-musl${ABI} \
+        --exec-prefix=/usr/${MUSLT}  \
+        --includedir=usr/include/${SUFFIX}-linux-musl${ABI} || exit 16
+     
+      echo "Building musl ${MUSLCVERSION}">&2
+      make ${WORKERS}   > /dev/null || exit 17
+      echo "Installing musl ${MUSLCVERSION}">&2 
+      rm -rf ${INSTPKG}; make DESTDIR=${INSTPKG} install  >/dev/null
+
+#
+# Add linux support
+#
+      cd    ${INSTPKG}/usr/include/${SUFFIX}-linux-musl${ABI}
+      for ITEM in asm asm-generic drm linux misc mtd rdma sound video xen ; do
+        mv ${ITEM} ${ITEM}.muslc
+        ln -sf ../linux-${KERNELARCH}/${ITEM}
+      done
+
+cat << ACEOF >  termio.h 
+/* Compatible <termio.h> for old `struct termio' ioctl interface.
+   This is obsolete; use the POSIX.1 `struct termios' interface
+   defined in <termios.h> instead.  */
+
+#include <termios.h>
+#include <sys/ioctl.h>
+
+ACEOF
+
+      cd -
+
+      mkdir${INSTPKG}/lib; cd ${INSTPKG}/lib
+        ln -sf ../usr/lib/${SUFFIX}-linux-musl${ABI}/libc.so ld-musl-${MUSARCH}.so.1
+      cd -
+
+      mkdir  ${INSTPKG}/etc/ ; echo "" > ${INSTPKG}/etc/ld-musl-${MUSARCH}.path
+
+      for ITEM in /usr/local/ /usr/ / ; do 
+        echo ${ITEM}/lib/${SUFFIX}-linux-musl${ABI}  >> ${INSTPKG}/etc/ld-musl-${MUSARCH}.path
+      done
+
+#   
+# Symlinks for kitchen build 
+#
+      cd ${INSTPKG}
+        makePkg ${PKGMUSLC} ${INSTPKG}
+      cd -
+
+      cd ${INSTPKG}/usr/include/${SUFFIX}-linux-musl${ABI}
+        for ITEM in $( ls -d ${KITCHEN}/${KERNELARCH}/linux/usr/include/linux-${KERNELARCH}/* ) ; do
+          ln -sf ${ITEM}
+        done
+      cd -
+    fi
+  fi
+fi
+
+#echo "SETPOINT 7">&2 ; exit
+
+#
+# Build GCC Finale ( same as boostrap plus glibc ) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+
+for LIBCTYPE in ${LIBCLIST} ; do
+
+  case ${LIBCTYPE} in 
+    musl) DISTPKG=${PKG_C_ML} ;;
+     gnu) DISTPKG=${PKG_C_GN} ;;
+  esac
+        STEMP=${KITCHEN}/${DESTARCH}/${LIBCTYPE}/
+      INSTPKG=${KITCHEN}/${DESTARCH}/finale/${LIBCTYPE}
+    GCCTARGET=${DESTARCH}-${VENDOR}-linux-${LIBCTYPE}${ABI}
+# Fake limits.h
+#
+#  touch ${STEMP}/usr/include/${SUFFIX}-linux-${LIBCTYPE}${ABI}
+
+  if [ ! -e "${DISTPKG}" ] ; then # Not created, about to create
+    cd ${CWD}; if [ -x "${INSTPKG}/bin/${GCCTARGET}-gcc" ] ; then
+      echo "cross gcc finale for ${DESTARCH} yet installed">&2
+    else
+      if [ -e "gcc-${GCCVERSION}/finale/${GCCTARGET}/gcc/config.log" ] ; then
+        cd "gcc-${GCCVERSION}/finale/${GCCTARGET}"
+        echo "GCC for ${GCCTARGET} finale yet build ... "
+      else
+        echo "Configuring GCC for ${GCCTARGET} finale ... "
+        mkdir -p "gcc-${GCCVERSION}/finale/${GCCTARGET}"
+        cd "gcc-${GCCVERSION}/finale/${GCCTARGET}"
+        ../../configure ${GCCCONF}  --build=${HOST} --host=${HOST} --target=${GCCTARGET}  \
+        CFLAGS_FOR_TARGET="${CFLAGS_FOR_TARGET} --sysroot=${STEMP} " \
+      CXXFLAGS_FOR_TARGET="${CFLAGS_FOR_TARGET} --sysroot=${STEMP} " \
+            --prefix=/usr  --disable-rpath  \
+            --with-build-sysroot=${STEMP} --with-sysroot=/ \
+            --libdir=/usr/lib/${SUFFIX}-linux-${LIBCTYPE}${ABI} \
+            --enable-gold \
+            --with-gnu-ld --with-ld=/usr/bin/${TARGET}-ld \
+            --with-gnu-as --with-as=/usr/bin/${TARGET}-as \
+            --enable-languages=c,c++,jit,lto,objc,obj-c++${ADDL} \
+            --enable-threads \
+            --disable-werror \
+            --enable-libquadmath --enable-libquadmath-support \
+            --disable-libunwind-exceptions       \
+            --with-system-zlib                   \
+            --disable-decimal-float              \
+            --disable-libmudflap                 \
+            --disable-install-libiberty          \
+            --disable-multilib --enable-multiarch  \
+            --enable-static --enable-shared --enable-host-shared  \
+            --disable-libsanitizer --disable-gnu-indirect-function --disable-libmpx --enable-libstdcxx-time=rt  --enable-libstdcxx-time  --enable-deterministic-archives \
+             > /dev/null || exit 3
+      fi
+        echo "Building GCC FINALE for ${GCCTARGET} finale"
+        make ${WORKERS} LIBDIRSUFFIX=/${SUFFIX}-linux-${LIBCTYPE}${ABI}>/dev/null ||      \
+        make            LIBDIRSUFFIX=/${SUFFIX}-linux-${LIBCTYPE}${ABI}           || exit 1
+      echo "Installing GCC FINALE">&2
+      rm -rf ${INSTPKG}
+      make DESTDIR=${INSTPKG} install > /dev/null || exit 1
+
+      mkdir -p ${INSTPKG}/usr/bin; cd ${INSTPKG}/${CROSSDIR}/bin
+        for ITEM in `ls ../../rootfs/${DESTARCH}/${HOSTTYPE}/bin/${GCCTARGET}-*` ; do
+          ln -sf ${ITEM}  || exit 23  # from linuxfromscratch, more or less
+        done
+      cd -
+
+      cd ${INSTPKG}/usr/libexec/gcc/${GCCTARGET}/${GCCVERSION}/
+        for ITEM in as ld ar ranlib nm objcopy objdump readelf size strip strings; do
+          ln -sf ../../../../bin/${GCCTARGET}-${ITEM} ${ITEM}
+        done
+      cd -
+
+      cd  ${INSTPKG}/usr/${GCCTARGET}/lib
+        mv */* .                                  # sh4 port does strange things
+      cd ${INSTPKG}
+    fi
+
+# ???, access to limits.h
+#   
+    ITEM=${INSTPKG}/usr/lib/${SUFFIX}-linux-${LIBCTYPE}${ABI}/gcc/${GCCTARGET}/${GCCVERSION}/include-fixed/limits.h
+    if ! grep -q "include_next" ${ITEM} ; then
+#      sed  -e "/^#endif[ ][^ ][^ ][ ]_LIMITS_H_.*/i #include<${SUFFIX}-linux-${LIBCTYPE}${ABI}/limits.h>  // altomaltes bugfix "  -i ${ITEM}  || exit 45
+#      sed  -e "/^#endif[ ][^ ][^ ][ ]_LIMITS_H_.*/i #define _GCC_LIMITS_H_ \n #ifndef _LIBC_LIMITS_H_ \#include_next<limits.h>  // altomaltes bugfix \n#endif "  -i ${ITEM}  || exit 45
+      sed  -e "/^#endif[ ][^ ][^ ][ ]_LIMITS_H_.*/i #define _GCC_LIMITS_H_ \n#ifndef _LIBC_LIMITS_H_\n  #include_next<limits.h>  // altomaltes bugfix \n#endif\n"  -i ${ITEM}  || exit 45
+    fi 
+
+#
+# Create and install recently created package
+#
+    echo "Creating cross gcc ${DISTPKG} package for ${DESTARCH}">&2
+    makePkg ${DISTPKG}
+
+    cd ${INSTPKG}/usr/lib/${SUFFIX}-linux-${LIBCTYPE}${ABI}/gcc/${GCCTARGET}/${GCCVERSION}/include-fixed/
+      ln -sf ${KITCHEN}/${DESTARCH}/${LIBCTYPE}/usr/include/${SUFFIX}-linux-${LIBCTYPE}${ABI}/
+    cd -
+
+    cd ${INSTPKG}/usr/bin/
+      for ITEM in $( ls ../../../../binutils/usr/bin/${GCCTARGET}-* ); do
+        ln -s ${ITEM} 
+      done
+    cd -
+
+    cd ${KITCHEN}/bin
+      for ITEM in $( ls ../${DESTARCH}/finale/${LIBCTYPE}/usr/bin/${GCCTARGET}-* ); do
+        ln -s ${ITEM} 
+      done
+    cd -
+
+  else
+    echo "gcc finale ${DISTPKG} package created from ${INSTPKG} ">&2
+  fi
+
+done
+
+#echo "SETPOINT 8 ">&2; exit
+
+
+exit 0 
+
