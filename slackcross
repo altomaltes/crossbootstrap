@@ -507,9 +507,10 @@ cd ${CWD}; for ITEM in BIN GCC KERNEL GLIBC MUSLC; do
 #
 # Same thing: ( 2-> avoid fixincludes, from linux from scratch )
 #
+#               -e 's@\./fixinc\.sh@-c true@' \
+
             sed -e 's|if \$(MULTILIB_OSDIRNAMES),,\$(MULTIARCH_DIRNAME)|PREFIX)-linux-\$(LIBCTYPE|' \
                 -e 's|$(MULTIARCH_DIRNAME)|$(PREFIX)-linux-$(LIBCTYPE)|' \
-                -e 's@\./fixinc\.sh@-c true@' \
                 -e 's|PREPROCESSOR_DEFINES =|PREPROCESSOR_DEFINES = -DARCHPREFIX=\\\"$(LIBDIRPREFIX)\\\" |' \
                 -e 's#gcc.o += $(DRIVER_DEFINES)#gcc.o += -DSTANDARD_STARTFILE_PREFIX_1=\\\"/usr/lib$(LIBDIRPREFIX)/\\\" -DSTANDARD_STARTFILE_PREFIX_2=\\\"/lib$(LIBDIRPREFIX)/\\\" $(DRIVER_DEFINES)#' \
                -i Makefile.in || exit 45
