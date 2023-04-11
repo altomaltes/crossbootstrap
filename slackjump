@@ -1,0 +1,295 @@
+#!/bin/bash
+# Copyright 2017-2018  Jose Angel Caso Sanchez ASTURIAS, SPAIN
+#                      altomaltes@gmail.com
+# All rights reserved.
+#
+# Redistribution and use of this script, with or without modification, is
+# permitted provided that the following conditions are met:
+#
+# 1. Redistributions of this script must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+#  THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR IMPLIED
+#  WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+#  MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO
+#  EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+#  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+#  PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+#  OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+#  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+#  OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+#  ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+
+LC_ALL="C"
+
+source /etc/slackpkg/slackbld.conf 2>/dev/null
+
+#ROOTFS=${CROSSDIR}/rootfs/${1} 
+#ROOTFS=$( realpath $ROOTFS )
+
+# Give help
+#
+case ${#} in
+  0) echo "">&2; 
+     echo "Qemu emulation starter (altomaltes@gmail.com)">&2; 
+
+     if [ -d /proc/sys/fs/binfmt_misc ]; then 
+       echo  "Kernel Binfmt support alive">&2;
+       if [ -f /proc/sys/fs/binfmt_misc/register ]; then
+         echo  "">&2;
+         echo  "Emulation list starts here:">&2;
+         echo  "">&2;
+         
+         for ITEM in /proc/sys/fs/binfmt_misc/*; do
+           if [ "${ITEM}" != "/proc/sys/fs/binfmt_misc/register" ]  ; then		 
+             ITEM=$( grep qemu ${ITEM} )	
+	     if  [ "${ITEM}" != "" ] ; then
+               echo -n "  "		     
+               echo ${ITEM} | cut -f 2 -d ' ' 
+             fi	     
+           fi  	   
+         done	 	 
+         echo  "">&2;
+         echo  "End of emulation list">&2;
+       fi	     
+     fi       
+
+     exit 0
+  ;;	  
+
+esac	
+
+# Extract the arch component
+#
+ARCH=$( echo ${1} | cut    -f 1 -d + )
+LIBC=$( echo ${1} | cut -s -f 2 -d + )
+
+# Put qemu in place
+
+case ${ARCH} in
+  aarch64) EMUID='aarch64'
+           MAGIC='\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff'
+        ;;
+
+     i386) EMUID='i386'
+           MAGIC='\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x03\x00'
+            MASK='\xff\xff\xff\xff\xff\xfe\xfe\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+        ;;
+
+     i486) EMUID='i486'
+           MAGIC='\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x06\x00'
+            MASK='\xff\xff\xff\xff\xff\xfe\xfe\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+        ;;
+
+     x86_64) EMUID='x86_64'
+           MAGIC='\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00'
+            MASK='\xff\xff\xff\xff\xff\xfe\xfe\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+        ;;
+
+     alpha) EMUID='alpha'
+           MAGIC='\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x26\x90'
+            MASK='\xff\xff\xff\xff\xff\xfe\xfe\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+        ;;
+
+     arm) EMUID='arm'
+           MAGIC='\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x28\x00'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+       ;;
+
+     armeb) EMUID='armeb'
+           MAGIC='\x7fELF\x01\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x28'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff'
+       ;;
+
+     sparc) EMUID='sparc'
+           MAGIC='\x7fELF\x01\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x02'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff'
+       ;;
+
+   sparc64) EMUID="sparc64"
+           MAGIC='\x7fELF\x02\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x2b'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff'
+      ;;
+
+     sparc32plus) EMUID="sparc32plus"
+           MAGIC='\x7fELF\x01\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x12'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff'
+       ;;
+
+     powerpc) EMUID="ppc"
+           MAGIC='\x7fELF\x01\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x14'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff'
+       ;;
+
+     powerp64) EMUID="ppc64"
+           MAGIC='\x7fELF\x02\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x15'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff'
+       ;;
+
+     powerpc64le) EMUID="ppc64le"
+           MAGIC='\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x15\x00'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\x00'
+       ;;
+
+     m68k) EMUID="m68k"
+           MAGIC='\x7fELF\x01\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x04'
+            MASK='\xff\xff\xff\xff\xff\xff\xfe\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff'
+       ;;
+
+# FIXME: We could use the other endianness on a MIPS host.
+
+     mips) EMUID="mips"
+           MAGIC='\x7fELF\x01\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x08'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff'
+      ;;
+
+     mipsel) EMUID="mipsel"
+           MAGIC='\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x08\x00'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+      ;;
+
+     mipsn32) EMUID="mipsn32"
+           MAGIC='\x7fELF\x01\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x08'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff'
+      ;;
+ 
+     mipsn32el) EMUID="mipsn32el"
+           MAGIC='\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x08\x00'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+      ;;
+
+     mips64) EMUID="mips64"
+           MAGIC='\x7fELF\x02\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x08'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff'
+      ;;
+
+     mips64el) EMUID="mips64el"
+           MAGIC='\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x08\x00'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+      ;;
+
+     sh4) EMUID="sh4"
+           MAGIC='\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x2a\x00'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+      ;;
+
+     sh4eb) EMUID="sh4eb"
+           MAGIC='\x7fELF\x01\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x2a'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff'
+      ;;
+
+     s390x) EMUID='s390x'
+            MAGIC='\x7fELF\x02\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x16'
+             MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff'
+      ;;
+
+     aarch64_be) EMUID='aarch64_be'
+           MAGIC='\x7fELF\x02\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff'
+      ;;
+
+    microblazebe|microblaze) EMUID='microblaze'
+           MAGIC='\x7fELF\x01\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xba\xab'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+      ;;
+
+    microblazeel) EMUID='microblazeel'
+           MAGIC='\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xab\xba'
+            MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+      ;;
+
+    or1k) EMUID='or1k'
+          MAGIC='\x7fELF\x01\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x5c'
+           MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff'
+      ;;
+
+     "") echo Starting native emulation for ${HOSTTYPE}
+      ROOTFS=/var/cache/rootfs/${HOSTTYPE} 
+     ;;
+
+
+   *) echo ${ARCH} is not a supported system
+      exit
+  ;;  
+esac
+
+# Shutdown emulation
+#
+if [ "${2}" == "down" ]; then
+  if [ -f "/proc/sys/fs/binfmt_misc/${EMUID}" ]; then
+    echo "Shutting down emulation for ${1}">&2 
+    echo "-1" > /proc/sys/fs/binfmt_misc/${EMUID}
+  else
+    echo "Emulation for ${1} yet DOWN">&2 
+  fi
+  exit 0
+fi
+
+QEMUPATH=/sbin/qemu
+QEMUHELPER=${QEMUPATH}/qemu-${EMUID}
+echo --------------------- $EMUID
+
+# load the binfmt_misc module
+#
+if [ -d /proc/sys/fs/binfmt_misc ]; then
+ echo "binfmf_misc module yet installed">&2
+else 	
+ echo "Installing binfmf_misc module">&2
+ if ! /sbin/modprobe binfmt_misc ; then
+   echo "Cant install binfmf_misc module">&2
+   exit 1
+ fi
+fi
+
+# Mount the binfmt filesystem
+#
+if [ -f /proc/sys/fs/binfmt_misc/register ]; then
+  echo "binfmf_misc filesystem yet mounted">&2
+else 	
+  echo "Mounting binfmf_misc filesystem">&2
+  if ! mount binfmt_misc -t binfmt_misc /proc/sys/fs/binfmt_misc ; then
+    echo "Can´t mount binfmf_misc filesystem">&2
+    exit 1
+  fi 
+fi
+
+# Start the CPU emulation
+#
+if [ -x  ${QEMUHELPER} ] ; then 
+  if [ -f "/proc/sys/fs/binfmt_misc/${EMUID}" ]; then
+    echo "${EMUID} simulation yet started to ${QEMUHELPER}">&2
+  else
+    echo "Starting ${EMUID} simulation to ${QEMUHELPER}">&2
+    echo ":${EMUID}:M::${MAGIC}:${MASK}:${QEMUHELPER}:" > /proc/sys/fs/binfmt_misc/register
+  fi
+else
+  echo "Helper ${QEMUHELPER} for ${EMUID} not present">&2
+fi     	
+
+exit
+
+# Make execution from host possible 
+#
+if [ ! -x /sbin/qemu-${HOSTTYPE}-${EMUID} ]; then
+  echo "#!/bin/bash" > /sbin/qemu-${HOSTTYPE}-${EMUID}
+  echo "exec /usr/sbin/qemu-${EMUID} -L ${ROOTFS}  \"\${@}\" " >> /sbin/qemu-${HOSTTYPE}-${EMUID}
+  chmod +x             /sbin/qemu-${HOSTTYPE}-${EMUID} 
+  cp                   /usr/sbin/qemu-${EMUID} ${ROOTFS}/sbin/qemu-${HOSTTYPE}-${EMUID}
+fi
+
+
+[ -d ${ROOTFS}/sys/block ] || ( mount -t sysfs   sys ${ROOTFS}/sys/ &&  \
+                                mount -t proc   proc ${ROOTFS}/proc/ && \
+                                mount -o bind   /dev ${ROOTFS}/dev/ &&  \
+                                mount -t tmpfs tmpfs ${ROOTFS}/dev/shm/ )
+
+mkdir -p  ${ROOTFS}/opt/ftp
+[ -d ${ROOTFS}/sys/block ] ||  mount --bind /opt/ftp  ${ROOTFS}/opt/ftp 
+
+
+
+echo exec chroot ${ROOTFS} 
+
+
