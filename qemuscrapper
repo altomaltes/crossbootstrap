@@ -1,0 +1,437 @@
+#!/bin/bash
+# Copyright 2017-2018  Jose Angel Caso Sanchez ASTURIAS  SPAIN
+#                      altomaltes@gmail.com
+# All rights reserved.
+#
+# Redistribution and use of this script, with or without modification, is
+# permitted provided that the following conditions are met:
+#
+# 1. Redistributions of this script must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+#  THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR IMPLIED
+#  WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+#  MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO
+#  EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+#  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+#  PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+#  OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+#  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+#  OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+#  ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+
+# rsync lzip python3 patchelf gawk rsync
+
+#PRECOND="lzip patchelf gawk rsync make bash tar gzip find grep diff patch sed xargs chmod chown xz "
+
+unset LD_LIBRARY_PATH LIBRARY_PATH CPLUS_INCLUDE_PATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH
+
+MEMORY=$(free | awk '/^Mem:/{print $2}')
+WORKERS=" $(( ${MEMORY}/500000 ))"
+
+[ ${WORKERS} > $( nproc ) ] && WORKERS=$(($( nproc ) +1 ))
+WORKERS=" -j ${WORKERS} "
+
+export LC_ALL="C"
+export PREFIX                                  # multiarch generalize
+export LIBCTYPE=$(echo $OSTYPE | cut -f2 -d-)
+
+CWD=/tmp/slackroot;        mkdir -p ${CWD}
+KITCHEN=${CWD}/kitchen;    mkdir -p ${KITCHEN} 
+TOOLSDIR=${KITCHEN}/tools; mkdir -p ${TOOLSDIR}
+LOGS=${KITCHEN}/logs;      mkdir -p ${LOGS}
+
+PKGEXT='tar.xz'
+EXTDIR=/var/cache/source/extra
+SRCDIR=/var/cache/source/slackware
+
+echo "">&2
+if [ -f "/etc/slackware-version" ] ; then
+  echo "Slackware version $(cat /etc/slackware-version ) detected" >&2
+  VENDOR=slackware
+
+  if  [ -f "/etc/slackpkg/slackpkg.conf"  ] ; then
+    echo "Slackware build environement detected"  >&2
+    . /etc/slackpkg/slackpkg.conf
+    EXTDIR=${SOURCESDIR}/extra
+    SRCDIR=${SOURCESDIR}/slackware
+    PKGEXT='txz'
+  fi
+
+  VENDOR+='-'      	
+  PKGDIR=/var/cache/packages
+  EXTDIR=/var/cache/source/extra
+  SRCDIR=/var/cache/source/slackware/source
+  PKGHOST=${PKGDIR}/${HOSTTYPE}
+else
+  echo "Generic builder" >&2
+  VENDOR=''
+  SRCDIR=${CWD}/dl
+  EXTDIR=${CWD}/dl
+  PKGHOST=${CWD}/out
+  PKGDEST=${CWD}/out
+fi
+
+echo "| ">&2
+EXTDIR=/var/cache/source/extra
+SRCDIR=/var/cache/source/slackware/source
+
+
+mkdir -p ${SRCDIR} ${PKGDIR}
+     
+# Seach for source packages ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+   QEMU=$( echo ${CWD}/dl/qemu-*.tar.*z)   ; [ -f ${QEMU}   ] ||   QEMU=$( echo ${EXTDIR}/ap/qemu/qemu-*.*.*.tar.*z) ; [ -f ${QEMU}   ] ||   QEMU="qemu-*.*z     ( tested qemu-7.2.0    )"
+  GLIB2=$( echo ${CWD}/dl/glib-*.tar.*z)   ; [ -f ${GLIB2}  ] ||  GLIB2=$( echo ${SRCDIR}/l/glib2/glib-*.*.*.tar.*z) ; [ -f ${GLIB2}  ] ||   GLIB2="glib-*.*z    ( tested glib-2.70.3   )"
+   PCRE=$( echo ${CWD}/dl/pcre-*.tar.*z)   ; [ -f ${PCRE}   ] ||   PCRE=$( echo ${SRCDIR}/l/pcre/pcre-*.*.tar.*z)    ; [ -f ${PCRE}   ] ||    PCRE="pcre-*.*z    ( tested pcre-8.45   )"
+   BBOX=$( echo ${CWD}/dl/busybox-*.*.*.*) ; [ -f ${BBOX}   ] ||   BBOX=$( echo ${SRCDIR}/a/mkinitrd/busybox-*.*.*.*2); [ -f ${BBOX}   ] ||   BBOX="busybox-*.bz2  ( tested busybox-1.32  )"
+
+echo "">&2
+
+for ITEM in QEMU GLIB2 PCRE BBOX; do
+  BASE=${ITEM}BASE
+  NAME=${ITEM}VERSION
+
+  if [ -f "${!ITEM}" ] ; then
+    echo  "${ITEM} found as ${!ITEM} "
+    STRIPPED=$( basename ${!ITEM} | rev | cut -s -d . -f3- | rev )
+    declare ${NAME}=$( echo $STRIPPED | rev | cut -s -d - -f1 | rev )
+    declare ${BASE}=$( echo $STRIPPED | rev | cut -s -d - -f2- | rev );
+  else
+    echo "No ${!ITEM} sources found on ${SRCDIR}/? or ${CWD}/dl">&2
+    VENDOR='none'  # used as flag
+  fi
+
+done
+
+echo "">&2
+
+if [ "${VENDOR}" == "none" ] ; then
+  echo "Download required sources to ${CWD}/dl or mount the slackware source tree over ${SRCDIR}">&2
+  exit 1
+fi
+
+# Get the target flags  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+
+ARCHES='
+  armv5l armv6l armv7l mips mipsel mips64 mips64el
+  x86_64 i586 i486 sparc64
+  powerpc powerpc64 powerpc64le
+  microblaze microblazeel
+  sh4 sh4eb nios2 or1k csky 
+  riscv64 riscv
+  hppa alpha
+  aarch64
+'
+
+##
+#   Build flags for both build and target
+#
+
+
+if [ -x "$( which makepkg )" ] ; then
+
+  PKG_QEMU=${PKGHOST}/ap
+
+  makePkg()
+  { if [ -e "${1}" ]; then
+      echo "${1} yet created from ${INSTPKG}">&2
+    else
+      cd ${INSTPKG} || exit 3
+      echo "Stripping ${INSTPKG}">&2
+      find . | xargs file | grep "executable"    | grep ELF | cut -f 1 -d : | xargs strip --strip-unneeded 2> /dev/null
+      find . | xargs file | grep "shared object" | grep ELF | cut -f 1 -d : | xargs strip --strip-unneeded 2> /dev/null
+      echo "Creating ${1} from ${INSTPKG}">&2
+      find . -type l | tar -cf ../backup-links.tar -T -
+        makepkg -l y -c n "${1}"
+      tar -xf ../backup-links.tar
+      cd -
+    fi
+  }
+else
+  PKG_QEMU=${PKGHOST}
+
+  makePkg()
+  { if [ -e "${1}" ]; then
+      echo "${1} yet created from ${INSTPKG}">&2
+    else
+      cd ${INSTPKG};
+      echo "Stripping ${INSTPKG}">&2
+      find . | xargs file | grep "executable"    | grep ELF | cut -f 1 -d : | xargs strip --strip-unneeded 2> /dev/null
+      find . | xargs file | grep "shared object" | grep ELF | cut -f 1 -d : | xargs strip --strip-unneeded 2> /dev/null
+      echo "Creating ${1} from ${INSTPKG}">&2
+      tar -cf "${1}" .
+      cd -
+    fi
+  }
+fi
+
+for ITEM in PKG_QEMU; do
+  mkdir -p ${!ITEM}
+done
+
+PKG_QEMU+=/qemu+bbox-${QEMUVERSION}-${HOSTTYPE}-0.${PKGEXT}
+HOSTABI=$( echo ${MACHTYPE} | rev | cut -d - -f1 | rev )
+HOSTTYPE=$( echo ${MACHTYPE} | cut -d - -f1  )
+HOST=${HOSTTYPE}-${VENDOR}linux-${HOSTABI}
+
+
+echo "">&2
+echo "/====================================== SUMMARY  =====================================">&2
+echo "| ">&2
+echo "|    QEMU: ${QEMUVERSION}      GLIB: ${GLIB2VERSION}    PCRE: ${PCREVERSION}">&2 
+echo "| BUSYBOX: ${BBOXVERSION}">&2 
+echo "| WORKERS: ${WORKERS} KITCHEN: ${KITCHEN}">&2
+echo "|    HOST: ${HOST}">&2
+echo "| ">&2
+echo "| SCRAPPED BUSYBOX BUILDERS: ( From  ${KITCHEN}/tools/bin )">&2
+echo "| ">&2
+
+
+cd ${KITCHEN}/tools/bin/
+  for ITEM in ${ARCHES}; do
+    SUMMARY=""
+    for LIBC in gnu musl gnueabi musleabi ; do
+      FIL=${ITEM}-${VENDOR}linux-${LIBC}-gcc  
+      TGT=$( readlink ${FIL} )
+
+      if [ -n "$( echo ${TGT} | grep /finale/${LIBC} )" ]; then
+        if [ "${TGT}" != "" ] ; then
+          if [ "${FIL}" == "$( basename ${TGT})" ] ; then
+            ARCH=$( echo  ${FIL} | rev | cut -d - -f 2- | rev )
+            SUMMARY+="${ARCH} " 
+            BBOXLIST+="${ARCH} "	
+          fi	    
+        fi	
+      fi      
+    done
+    [ -z "${SUMMARY}" ]  || echo "|  ${SUMMARY}  " >&2
+  done	
+cd - >/dev/null 
+
+
+echo "| ">&2
+ [ -f ${PKG_QEMU} ] && PRESENT='*' || PRESENT='' ; echo "|     QEMU: ${PKG_QEMU} ${PRESENT}  ">&2 
+echo "| ">&2
+echo "\\=====================================================================================">&2
+echo "">&2
+
+PATH=${TOOLSDIR}/bin:/usr/bin:/bin:/sbin:/usr/${MACHTYPE}/bin:${KITCHEN}/bootstrap/bin
+
+
+#echo "SETPOINT 1"; exit 1
+
+
+
+# Extract Neded sources ( and patch gcc once untarred), ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+cd ${CWD}; for ITEM in QEMU BBOX GLIB2 PCRE; do
+  NAME=${ITEM}BASE
+  TARFILE=${!ITEM}
+  declare ${NAME}=$(echo $( basename ${TARFILE} | cut -s -d - -f2 | rev | cut -d . -f 3- | rev )); VERSION=${!NAME}
+  declare ${NAME}=$(echo $( basename ${TARFILE} | cut -s -d - -f1 )); BASE=${!NAME}; FOLDER=${BASE}-${VERSION}
+
+  if [ -d "${FOLDER}" ] ; then
+    echo "${BASE} ${VERSION} yet expanded">&2
+  else
+    if [ -f "${TARFILE}" ]; then
+      echo "Expanding ${BASE} ${VERSION}">&2
+      tar -xf ${TARFILE}
+    fi
+  fi
+done
+
+#     aarch64-linux-user aarch64_be-linux-user alpha-linux-user \
+#     arm-linux-user armeb-linux-user cris-linux-user \
+#     hexagon-linux-user hppa-linux-user i386-linux-user \
+#     loongarch64-linux-user m68k-linux-user microblaze-linux-user \
+#     microblazeel-linux-user mips-linux-user mips64-linux-user \
+#     mips64el-linux-user mipsel-linux-user mipsn32-linux-user \
+#     mipsn32el-linux-user nios2-linux-user or1k-linux-user \
+#     ppc-linux-user ppc64-linux-user ppc64le-linux-user \
+#     riscv32-linux-user riscv64-linux-user s390x-linux-user \
+#     sh4-linux-user sh4eb-linux-user sparc-linux-user sparc32plus-linux-user \
+#     sparc64-linux-user x86_64-linux-user xtensa-linux-user xtensaeb-linux-user \
+
+# Build qemu helper
+#    ./gobject/.libs/libgobject-2.0.a
+#
+INSTPKG=${KITCHEN}/qemu
+cd ${CWD}; if [  -f ${PKG_QEMU}  ] ; then
+  echo "QEMU for ${TARGET} yet installed"
+else
+  PKGCONFIG=${TOOLSDIR}/bin/${HOST}-pkg-config
+  INSTALLDIR=${KITCHEN}/helpers/${HOST}
+
+  if  [ -x ${INSTPKG}/sbin/qemu/qemu-${HOSTTYPE} ]; then
+    echo "QEMU emulator qemu-${HOSTTYPE} set yet installed in ${INSTPKG}/sbin/qemu/">&2	    
+  else
+# Build the static version of PCRE
+#
+    if [ ! -x ${INSTALLDIR}/usr/lib/libpcre.a ] ; then
+      echo "Auxiliar package pcre static yet installed">&2
+    else
+
+# Configure and build pcre ( to get static library )
+#
+      mkdir -p "${CWD}/pcre-${PCREVERSION}/build-${HOST}";  cd "${CWD}/pcre-${PCREVERSION}/build-${HOST}"
+      if  [ -f "Makefile" ] ; then
+        echo "Auxiliar package pcre yet configured in ${PWD} ">&2
+      else
+        echo "Configuring auxiliar package pcre in  ${PWD}">&2
+        ../configure \
+          --build=${HOST} \
+          --prefix=${INSTALLDIR} \
+          --libdir=${INSTALLDIR}/lib${HOSTDIRPREFIX} \
+          --enable-static --disable-shared  > ${LOGS}/pcre.config.log
+      fi
+      echo "Building PCRE for ${HOST}"
+      make ${WORKERS} > ${LOGS}/pcre.make.log || make V=1
+      make install > ${LOGS}/pcre.install.log || make install V=1
+    fi
+
+
+# Build the static version of GLIB2
+#
+    if [ -x ${PKGCONFIG} ] ; then
+      echo "Auxiliar package glib static ( ${PKGCONFIG} ) yet installed">&2
+    else
+      cd ${CWD}/glib-${GLIB2VERSION}
+      echo "Configuring auxiliar package glib static in ${CWD}/glib-${GLIB2VERSION} ">&2
+#
+# Get rid of some meson stubborness
+#
+#   cd ${KITCHEN}
+#    ln -sf ${TOOLSDIR}/bin/${BUILD}-ld ld
+#    PATH+=':'${PWD}
+#    -Dinternal_pcre=true \
+#
+        mkdir native-build 2>/dev/null; cd native-build
+        ls ../meson.build
+        CFLAGS+=" -Wno-error=nonnull " CXXFLAGS+=" -Wno-error=nonnull "  meson setup \
+          --prefix=${INSTALLDIR} \
+          --libdir=${INSTALLDIR}/lib${HOSTDIRPREFIX} \
+          --sysconfdir=/etc \
+          --buildtype=release \
+          --default-library=static \
+          -Dselinux=disabled \
+          -Dman=false \
+          -Dgtk_doc=false \
+          -Dinstalled_tests=false \
+          .. || exit 1
+        "${NINJA:=ninja}" ${WORKERS}  > ${LOGS}/glib2.make.log || exit 1
+        $NINJA install  > ${LOGS}/glib2.install.log || exit 1
+      cd ..
+      echo PKG_CONFIG_PATH="${KITCHEN}/glib-${GLIB2VERSION}/${HOST}/lib${HOSTDIRPREFIX}/pkgconfig exec `which pkg-config` \$@">${PKGCONFIG}
+      chmod +x ${PKGCONFIG}
+    fi
+#ls ${CWD}/qemu-${QEMUVERSION}/build-${HOSTTYPE}/config.log; exit
+
+    if [ -f  ${CWD}/qemu-${QEMUVERSION}/build-${HOSTTYPE}/config.log ]; then
+      echo "QEMU emulator set yet built">&2	    
+    else  
+      if [  -f ${CWD}/qemu-${QEMUVERSION}/native-build/config-host.h ]; then
+        echo "qemu-${QEMUVERSION} yet configured">&2
+        cd ${CWD}/qemu-${QEMUVERSION}/native-build
+      else
+        mkdir -p ${CWD}/qemu-${QEMUVERSION}/build-${HOSTTYPE} 
+        cd       ${CWD}/qemu-${QEMUVERSION}/build-${HOSTTYPE}
+
+        echo "Configuring QEMU emulator on ${CWD}/qemu-${QEMUVERSION}/build-${HOSTTYPE} ">&2
+        CC=${TOOLSDIR}/bin/${HOST}-gcc CXX=${TOOLSDIR}/bin/${HOST}-g++ \
+        ../configure \
+           --prefix=${INSTPKG} \
+                --cc=${TOOLSDIR}/bin/${HOST}-gcc \
+           --host-cc=${TOOLSDIR}/bin/${HOST}-gcc \
+           --interp-prefix=${SYSROOT} \
+           --disable-system  --static  \
+           --enable-fdt  \
+           --disable-curses \
+           --disable-sdl \
+           --disable-docs \
+           --enable-kvm \
+           --disable-vde \
+           --disable-smartcard \
+           --disable-vnc \
+           --disable-gtk --disable-vte \
+           --disable-spice \
+           --disable-tools \
+           --disable-guest-agent \
+           --disable-guest-agent-msi \
+           --disable-curl \
+           --disable-gnutls \
+           --disable-gcrypt \
+           --disable-nettle \
+           --disable-cap-ng \
+           --disable-brlapi \
+           --disable-mpath \
+           --disable-libnfs \
+           --disable-nettle \
+           --disable-gcrypt \
+           --disable-numa \
+           --disable-curl \
+           --disable-capstone  > ${LOGS}/qemu.config.log
+      fi	       
+      echo "Building QEMU emulator for  ${HOSTTYPE}-linux-user">&2
+      make ${WORKERS} > ${LOGS}/qemu.make.log || make || exit 50
+    fi
+    echo "Installing HOST qemu over  ${INSTPKG}">&2
+    rm -rf ${INSTPKG}/sbin/qemu/ ;  mkdir -p ${INSTPKG}/sbin/qemu/
+    cp $( file ${CWD}/qemu-${QEMUVERSION}/build-${HOSTTYPE}/qemu-* | grep ELF | cut -d : -f 1 )  ${INSTPKG}/sbin/qemu/
+  fi    
+
+# Create busybox helpers  
+#
+  if [ -n "${BBOXVERSION}" ]; then
+    for BBOXTARGET in ${HOST} ${BBOXLIST} ; do
+      LIBCTYPE=$( echo ${BBOXTARGET} | rev | cut -d - -f 1 | rev )
+      SROOT=$(    echo ${BBOXTARGET} | sed -e 's|-linux-|/|')
+      BUILDFOLDER=${CWD}/busybox-${BBOXVERSION}/build-${BBOXTARGET}	
+      cd "${CWD}/busybox-${BBOXVERSION}"
+        if [ -x ${BUILDFOLDER}/busybox ] ; then
+          echo "busybox ${BBOXVERSION} for ${BBOXTARGET} yet built">&2
+        else
+          if [ -e "${BUILDFOLDER}/.config" ] ; then
+            echo "BUSYBOX for ${BBOXTARGET}  yet configured in ${BUILDFOLDER} ... ">&2
+          else
+            make mrproper	      
+            echo "Configuring native BUSYBOX for ${BBOXTARGET}  ... ">&2
+            mkdir -p ${BUILDFOLDER}
+            make O="${BUILDFOLDER}" \
+               CROSS_COMPILE="${TOOLSDIR}/bin/${BBOXTARGET}-" \
+                      HOSTCC="${TOOLSDIR}/bin/${HOST}-gcc" defconfig > ${LOGS}/bbox.${BBOXTARGET}.config.log
+            sed -e '/CONFIG_FEATURE_SH_STANDALONE/s/.*/CONFIG_FEATURE_SH_STANDALONE=y/' \
+                -e '/CONFIG_STATIC/s/.*/CONFIG_STATIC=y/' \
+                -e '/CONFIG_FEATURE_SH_NOFORK/s/.*/CONFIG_FEATURE_SH_NOFORK=y/' \
+                -e '/CONFIG_EXTRA_LDLIBS=/s/.*/CONFIG_EXTRA_LDLIBS="pthread"/' \
+                -e '/CONFIG_FEATURE_PREFER_APPLETS/s/.*/CONFIG_FEATURE_PREFER_APPLETS=y/' \
+                -i ${BUILDFOLDER}/.config || exit 77
+            [ "${BBOXTARGET}" == "${HOST}" ] ||  sed -e  "s|CONFIG_SYSROOT=\"\"|CONFIG_SYSROOT=\"${KITCHEN}/${SROOT}/\"|" -i ${BUILDFOLDER}/.config || exit 77
+          fi
+
+          SYSROOT="/"; [ "${BBOXTARGET}" == "${HOST}" ] || SYSROOT="${KITCHEN}/${SROOT}/" 
+	  echo "Building native BUSYBOX for ${BBOXTARGET} ( ${SYSROOT} ) ... ">&2
+          make ${WORKERS} CFLAGS="${CFLAGS_FOR_TARGET} --sysroot=${SYSROOT} " \
+            O="${BUILDFOLDER}" \
+            CROSS_COMPILE="${TOOLSDIR}/bin/${BBOXTARGET}-"         > ${LOGS}/bbox.${BBOXTARGET}.make.log #|| exit 5
+          make ${WORKERS} CFLAGS="${CFLAGS_FOR_TARGET}  --sysroot=${SYSROOT} " \
+            O="${BUILDFOLDER}" \
+            CROSS_COMPILE="${TOOLSDIR}/bin/${BBOXTARGET}-" install  > ${LOGS}/bbox.${BBOXTARGET}.install.log #|| exit 6
+        fi  
+        cp ${BUILDFOLDER}/busybox ${INSTPKG}/sbin/qemu/busybox-${BBOXTARGET}
+      cd ${CWD}  
+    done  
+  fi
+
+  makePkg ${PKG_QEMU} ${INSTPKG}
+fi
+
+
+
+exit 0 
+
+
+
+

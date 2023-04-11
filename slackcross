@@ -137,13 +137,14 @@ fi
 
 # Get the target flags  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
+# csky
 
 ARCHES='
   armv5l armv6l armv7l mips mipsel mips64 mips64el
   x86_64 i586 i486 sparc64
   powerpc powerpc64 powerpc64le
   microblaze microblazeel
-  sh4 sh4eb nios2 or1k csky
+  sh4 sh4eb nios2 or1k 
   riscv64 riscv32
   hppa alpha'
 
@@ -295,10 +296,13 @@ esac
 [ -n "${UCLARCH}" ] && LIBCLIST+="uclibc"
 
 case "${DESTARCH}" in
-     riscv32) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada"         ;;
-        *86*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada,go,brig" ;;
-     mips64*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada"         ;;
  microblaze*) LANGUAGES="c,c++,d,jit,lto,objc,obj-c++"                     ;;
+      nios2*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++"             ;;
+       or1k*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++"             ;;
+     riscv32) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada"         ;;
+     mips64*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada"         ;;
+       hppa*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada"         ;;
+        *86*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada,go,brig" ;;
            *) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,go,ada"      ;; 
 esac
 
@@ -466,13 +470,12 @@ cd ${CWD}; for ITEM in BIN GCC KERNEL GLIBC MUSLC; do
       cd ${CWD}/${BASE}-${VERSION}
         for ITEM in ${SOURCESFILDER}/patches/*.*.gz  ; do   
           if [ -f ${ITEM} ] ; then	  
-            echo $PWD		  
-            echo $PWD		  
             echo apliying patch ${ITEM} over $PWD
             zcat ${ITEM} | patch -p1 
           fi    
         done  
       cd -	
+      echo "Applied">&2
 
   #    echo "Rgistering slackware description">&2
   #    cp ${SORCESFOLDER}/slack-desc         ${CWD}/${BASE}-${VERSION}/slack-desc 
@@ -508,12 +511,13 @@ cd ${CWD}; for ITEM in BIN GCC KERNEL GLIBC MUSLC; do
 # Same thing: ( 2-> avoid fixincludes, from linux from scratch )
 #
 #               -e 's@\./fixinc\.sh@-c true@' \
+#                -e 's/LIMITS_H_TEST =.*/LIMITS_H_TEST =true/g' \
 
             sed -e 's|if \$(MULTILIB_OSDIRNAMES),,\$(MULTIARCH_DIRNAME)|PREFIX)-linux-\$(LIBCTYPE|' \
                 -e 's|$(MULTIARCH_DIRNAME)|$(PREFIX)-linux-$(LIBCTYPE)|' \
                 -e 's|PREPROCESSOR_DEFINES =|PREPROCESSOR_DEFINES = -DARCHPREFIX=\\\"$(LIBDIRPREFIX)\\\" |' \
                 -e 's#gcc.o += $(DRIVER_DEFINES)#gcc.o += -DSTANDARD_STARTFILE_PREFIX_1=\\\"/usr/lib$(LIBDIRPREFIX)/\\\" -DSTANDARD_STARTFILE_PREFIX_2=\\\"/lib$(LIBDIRPREFIX)/\\\" $(DRIVER_DEFINES)#' \
-               -i Makefile.in || exit 45
+                -i Makefile.in || exit 45
 
 # From: Andreas Schwab <schwab at suse dot de>
 #
@@ -524,10 +528,11 @@ cd ${CWD}; for ITEM in BIN GCC KERNEL GLIBC MUSLC; do
             sed -e 's/test ! -x "$DEFAULT_LINKER"/false/' -e 's/test ! -x "$DEFAULT_ASSEMBLER"/false/' -i configure || exit 45
 
 # sh4 does not get multiarch
-            sed -e 's|INCLUDE_DEFAULTS|INCLUDE_DEFAULTS_JACS|' \
-                -i cppdefault.c || exit 45
+#            sed -e 's|INCLUDE_DEFAULTS|INCLUDE_DEFAULTS_JACS|' \
+#                -i cppdefault.c || exit 45
 
-# sh4 does not get multiarch
+# ortogonalize include path
+#
             sed -e 's|INCLUDE_DEFAULTS|INCLUDE_DEFAULTS_JACS|' \
                 -e 's|LOCAL_INCLUDE_DIR, 0, 0, 1, 1, 2|LOCAL_INCLUDE_DIR ARCHPREFIX, 0, 0, 1, 1, 0|' \
                 -e 's|NATIVE_SYSTEM_HEADER_DIR, NATIVE_SYSTEM_HEADER_COMPONENT, 0, 0, 1, 2|NATIVE_SYSTEM_HEADER_DIR ARCHPREFIX, NATIVE_SYSTEM_HEADER_COMPONENT, 0, 0, 1, 0|' \
@@ -541,7 +546,7 @@ cd ${CWD}; for ITEM in BIN GCC KERNEL GLIBC MUSLC; do
 
           cd -
 
-# Allow one time compile 
+# Allow one time compile ( versions unde 9 )
 #
          sed -e '/M_DEPS =/d' \
              -i ${CWD}/${BASE}-${VERSION}/libatomic/Makefile.in || exit 52
@@ -582,14 +587,6 @@ else
         echo "/usr/bin/${FILE} non usable as ${HOST}-${FILE}"
       fi
     done
-#
-#    for FILE in ar gcc-ar gcc g++ objcopy objdump strings ar ranlib cpp strip ${GNATX} ; do
-#      ln -s ${BUILS}-${FILE} ${FILE} 2>/dev/null # GNAT does not know about multi cross copile system
-#      ln -s ${BUILS}-${HOST} ${FILE} 2>/dev/null # GNAT does not know about multi cross copile system
-#    done
-#
-#  cd -
-#
 
 # Extract and copy  mixed chroot environement libraries needed
 #
@@ -622,10 +619,9 @@ GCCCONF+="
  ${DOCCONF}
  --enable-plugins
  --enable-lto
+ --disable-bootstrap
+
 "
-
-
-
 
 ORGDIRPREFIX=`${HOST}-gcc -print-file-name=libc.a`
 ORGDIRPREFIX=`dirname  ${ORGDIRPREFIX}`
@@ -658,7 +654,7 @@ else
         --with-as=${TOOLSDIR}/bin/${HOST}-as              \
         --without-isl                                      \
         --enable-checking=no                               \
-        --disable-multilib --disable-multiarch  --disable-bootstrap \
+        --disable-multilib --disable-multiarch \
         --disable-libquadmath --disable-libquadmath-support \
         --disable-libunwind-exceptions       \
         --enable-__cxa_atexit                \
@@ -812,14 +808,13 @@ else
         --prefix=/usr          \
         --with-gnu-ld --with-ld=${TOOLSDIR}/bin/${ELFTGT}-ld \
         --with-gnu-as --with-as=${TOOLSDIR}/bin/${ELFTGT}-as \
-        --enable-languages=c,c++                     \
+        --enable-languages=c                     \
         --disable-libquadmath --disable-libquadmath-support \
-        --with-newlib                            \
+        --with-newlib --without-headers                        \
         --disable-largefile                      \
         --disable-debug                          \
         --disable-nls                            \
         --disable-libunwind-exceptions           \
-        --without-headers                        \
         --disable-shared                         \
         --disable-threads                        \
         --disable-libgomp                        \
@@ -835,16 +830,14 @@ else
         --disable-libsanitizer --enable-tls      \
         --without-isl  --without-cloog           \
         --with-build-time-tools=${TOOLSDIR}/bin \
-        --disable-multilib   > ${LOGS}/gcc.${ELFTGT}.config.log || exit 5
+        --disable-multilib --disable-multiarch  > ${LOGS}/gcc.${ELFTGT}.config.log || exit 5
   fi
 
   echo "Building BOOTSTRAP HOST from ${HOSTTYPE} to ${ELFTGT} ">&2
-  make ${MAKEADDFLAGS} ${WORKERS} all-gcc           >  ${LOGS}/gcc.${ELFTGT}.make.log || make ${MAKEADDFLAGS} V=1 all-gcc           || exit 2
-  make ${MAKEADDFLAGS} ${WORKERS} all-target-libgcc >> ${LOGS}/gcc.${ELFTGT}.make.log || make ${MAKEADDFLAGS} V=1 all-target-libgcc || exit 3
+  make ${MAKEADDFLAGS} ${WORKERS} all-gcc all-target-libgcc > ${LOGS}/gcc.${ELFTGT}.make.log || make ${MAKEADDFLAGS} V=1 all-gcc all-target-libgcc  || exit 2
 
   echo "Installing BOOTSTRAP gcc from ${HOST} to ${ELFTGT} into ${INSTPKG}  ">&2
-  make DESTDIR=${INSTPKG} install-gcc           >  ${LOGS}/gcc.${ELFTGT}.install.log || exit 12 > /dev/null
-  make DESTDIR=${INSTPKG} install-target-libgcc >> ${LOGS}/gcc.${ELFTGT}.install.log || exit 13 > /dev/null
+  make DESTDIR=${INSTPKG} install-gcc install-target-libgcc  >  ${LOGS}/gcc.${ELFTGT}.install.log ||  make DESTDIR=${INSTPKG}  V=1 install-gcc install-target-libgcc || exit 12 > /dev/null
 
 ##
 #  Add legacy executable names
@@ -1168,6 +1161,7 @@ fi
 #echo "SETPOINT UCLIBC ${UCLIBVERSION}">&2 ; exit
 
 
+#--with-build-sysroot=${STEMP} --with-sysroot=/ --with-native-system-header-dir=/usr/include/${LIBDIRPREFIX} \
 
 # Build GCC Finale ( same as boostrap plus glibc ) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
@@ -1183,11 +1177,6 @@ for LIBCTYPE in ${LIBCLIST} ; do
         STEMP=${KITCHEN}/${DESTARCH}/${LIBCTYPE}/
       INSTPKG=${KITCHEN}/${DESTARCH}/finale/${LIBCTYPE}
     GCCTARGET=${DESTARCH}-${VENDOR}linux-${LIBCTYPE}${ABI}
-
-
-# Fake limits.h
-#
-#  touch ${STEMP}/usr/include/${PREFIX}-linux-${LIBCTYPE}${ABI}
 
   if [ ! -e "${DISTPKG}" ] ; then # Not created, about to create
     cd ${CWD}; if [ -x "${INSTPKG}/bin/${GCCTARGET}-gcc" ] ; then
@@ -1254,28 +1243,13 @@ for LIBCTYPE in ${LIBCLIST} ; do
         done
       cd -
 
+##
+#  this cross compilation does not nest the same name system includes
+#
+      for ITEM in ${INSTPKG}/usr/lib/${PREFIX}-linux-${LIBCTYPE}${ABI}/gcc/${GCCTARGET}/${GCCVERSION}/include-fixed/limits.h; do
+       sed -e "s|#endif /\* _LIMITS_H___ \*/|#define  _GCC_LIMITS_H_ \n\n#include <${PREFIX}-linux-${LIBCTYPE}${ABI}/limits.h>\n\n#endif /* _LIMITS_H_JACS_ */|g" -i ${ITEM} || exit 53
+      done
 
-# ???, access to limits.h
-#
-#    ITEM=${INSTPKG}/usr/lib/${PREFIX}-linux-${LIBCTYPE}${ABI}/gcc/${GCCTARGET}/${GCCVERSION}/include-fixed/limits.h
-#    if ! grep -q "include_next" ${ITEM} ; then
-#      sed  -e "/^#endif[ ][^ ][^ ][ ]_LIMITS_H_.*/i #include<${PREFIX}-linux-${LIBCTYPE}${ABI}/limits.h>  // altomaltes bugfix "  -i ${ITEM}  || exit 45
-#      sed  -e "/^#endif[ ][^ ][^ ][ ]_LIMITS_H_.*/i #define _GCC_LIMITS_H_ \n #ifndef _LIBC_LIMITS_H_ \#include_next<limits.h>  // altomaltes bugfix \n#endif "  -i ${ITEM}  || exit 45
-#echo      sed  -e "/^#endif[ ][^ ][^ ][ ]_LIMITS_H_.*/i #define _GCC_LIMITS_H_ \n#ifndef _LIBC_LIMITS_H_\n  #include_next<limits.h>  // altomaltes bugfix \n#endif\n"  -i ${ITEM}  || exit 45
-#    fi
-#    cd ${INSTPKG}/usr/lib/${PREFIX}-linux-${LIBCTYPE}${ABI}/
-#      mv ${INSTPKG}/usr/${GCCTARGET}/${LIBWIDE}/* . && rmdir ${INSTPKG}/usr/${GCCTARGET}/${LIBWIDE}/
-#      mv ${INSTPKG}/usr/lib/${LIBWIDE}/*          . && rmdir ${INSTPKG}/usr/${LIBWIDE}/
-#
-#      ITEM=$( readlink libstdc++.so ); rm libstdc++.so
-#      echo "OUTPUT_FORMAT(elf${LIBWIDE:3})" > libstdc++.so
-#      echo "GROUP ( ./${ITEM}  AS_NEEDED ( ./$( readlink libgcc_s.so  ) ) )" >> libstdc++.so
-#
-#      rm *.la
-#    cd -
-#
-# Create and install recently created package
-#
       echo "Creating cross gcc ${DISTPKG} package for ${DESTARCH}">&2
       makePkg ${DISTPKG} ${INSTPKG}  $( dirname ${GCC} )/slack-desc.gcc
        
@@ -1305,7 +1279,6 @@ for LIBCTYPE in ${LIBCLIST} ; do
  else
    echo "gcc finale ${DISTPKG} package created from ${INSTPKG} ">&2
  fi
-
 
 done
 
