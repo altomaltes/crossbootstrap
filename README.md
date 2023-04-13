@@ -21,19 +21,30 @@ The script gives information if the sources are not found.
 
 The (sucessfull) new steps for porting are:
 
-2) Cross build a minimal set of utilities, by means of the results of this script.
-3) Using real hardware, system qemu or chrooted user qemu build the rest of packages
++ Cross build a minimal set of utilities, by means of the results of this script.
++ Using real hardware, system qemu or chrooted user qemu build the rest of packages
 
 Above steps are already achieved, but are not stable enough for release.
 
-The versions tested are:
+The versions tested came from the Slackware 15.0 release:
 
- GCC  : 9.3.0
- LINUX: 5.4.46
- GLIBC: 2.30
- MUSL : 1.2.1
- BIN  : 2.33.1
+ - GCC  : 11.2.0
+ - LINUX: 5.15.19
+ - GLIBC: 2.33
+ - MUSL : 1.2.3
+ - BIN  : 2.37
 
+## script jobs
+
+  #### slackcross
+  The main builder. Builds the packages for a given architecture ( binutils, linux headers, glibc and/or musl, and cross gcc ) so you can build executables
+  
+  #### qemuscrapper
+  Iterates the files made for the slackcross, and builds a statically linked qemu and a busybox for the architectures selected.
+  
+  #### slackjump
+  Installs, lists and uninstalls the qemu helpers so you can run the foreing architecture in a trasparent way. It is possible to build a complete Slackware distribution this way.
+  
 
 Enjoy.
 
