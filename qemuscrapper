@@ -121,7 +121,7 @@ ARCHES='
   powerpc powerpc64 powerpc64le
   microblaze microblazeel
   sh4 sh4eb nios2 or1k csky 
-  riscv64 riscv
+  riscv64 riscv32
   hppa alpha
   aarch64
 '
@@ -193,19 +193,22 @@ echo "| ">&2
 cd ${KITCHEN}/tools/bin/
   for ITEM in ${ARCHES}; do
     SUMMARY=""
-    for LIBC in gnu musl gnueabi musleabi ; do
-      FIL=${ITEM}-${VENDOR}linux-${LIBC}-gcc  
-      TGT=$( readlink ${FIL} )
+    for ABI in '' eabi eabihf ; do
+      for LIBC in  musl gnu ; do
+        FIL=${ITEM}-${VENDOR}linux-${LIBC}${ABI}-gcc  
+        TGT=$( readlink ${FIL} )
 
-      if [ -n "$( echo ${TGT} | grep /finale/${LIBC} )" ]; then
-        if [ "${TGT}" != "" ] ; then
-          if [ "${FIL}" == "$( basename ${TGT})" ] ; then
-            ARCH=$( echo  ${FIL} | rev | cut -d - -f 2- | rev )
-            SUMMARY+="${ARCH} " 
-            BBOXLIST+="${ARCH} "	
-          fi	    
-        fi	
-      fi      
+
+        if [ -n "$( echo ${TGT} | grep /finale/${LIBC} )" ]; then
+          if [ "${TGT}" != "" ] ; then
+            if [ "${FIL}" == "$( basename ${TGT})" ] ; then
+              ARCH=$( echo  ${FIL} | rev | cut -d - -f 2- | rev )
+              SUMMARY+="${ARCH} " 
+              BBOXLIST+="${ARCH} "	
+            fi	    
+          fi	
+        fi      
+      done
     done
     [ -z "${SUMMARY}" ]  || echo "|  ${SUMMARY}  " >&2
   done	
@@ -270,7 +273,7 @@ else
   else
 # Build the static version of PCRE
 #
-    if [ ! -x ${INSTALLDIR}/usr/lib/libpcre.a ] ; then
+    if [  -f ${INSTALLDIR}/usr/lib/libpcre.a ] ; then
       echo "Auxiliar package pcre static yet installed">&2
     else
 
@@ -291,6 +294,7 @@ else
       make ${WORKERS} > ${LOGS}/pcre.make.log || make V=1
       make install > ${LOGS}/pcre.install.log || make install V=1
     fi
+echo 
 
 
 # Build the static version of GLIB2
@@ -340,7 +344,7 @@ else
         cd       ${CWD}/qemu-${QEMUVERSION}/build-${HOSTTYPE}
 
         echo "Configuring QEMU emulator on ${CWD}/qemu-${QEMUVERSION}/build-${HOSTTYPE} ">&2
-        CC=${TOOLSDIR}/bin/${HOST}-gcc CXX=${TOOLSDIR}/bin/${HOST}-g++ \
+        CC=${TOOLSDIR}/bin/${HOST}-gcc CXX=${TOOLSDIR}/bin/${HOST}-g++ LDFLAGS=" -L${INSTALLDIR}/lib${HOSTDIRPREFIX} " \
         ../configure \
            --prefix=${INSTPKG} \
                 --cc=${TOOLSDIR}/bin/${HOST}-gcc \
@@ -387,7 +391,7 @@ else
   if [ -n "${BBOXVERSION}" ]; then
     for BBOXTARGET in ${HOST} ${BBOXLIST} ; do
       LIBCTYPE=$( echo ${BBOXTARGET} | rev | cut -d - -f 1 | rev )
-      SROOT=$(    echo ${BBOXTARGET} | sed -e 's|-linux-|/|')
+      SROOT=$(    echo ${BBOXTARGET} | sed -e "s|-${VENDOR}linux-|/|" -e "s/eabihf//" -e "s/eabi//" )
       BUILDFOLDER=${CWD}/busybox-${BBOXVERSION}/build-${BBOXTARGET}	
       cd "${CWD}/busybox-${BBOXVERSION}"
         if [ -x ${BUILDFOLDER}/busybox ] ; then
@@ -413,9 +417,9 @@ else
 
           SYSROOT="/"; [ "${BBOXTARGET}" == "${HOST}" ] || SYSROOT="${KITCHEN}/${SROOT}/" 
 	  echo "Building native BUSYBOX for ${BBOXTARGET} ( ${SYSROOT} ) ... ">&2
-          make ${WORKERS} CFLAGS="${CFLAGS_FOR_TARGET} --sysroot=${SYSROOT} " \
+          make V=1 ${WORKERS} CFLAGS="${CFLAGS_FOR_TARGET} --sysroot=${SYSROOT} " \
             O="${BUILDFOLDER}" \
-            CROSS_COMPILE="${TOOLSDIR}/bin/${BBOXTARGET}-"         > ${LOGS}/bbox.${BBOXTARGET}.make.log #|| exit 5
+            CROSS_COMPILE="${TOOLSDIR}/bin/${BBOXTARGET}-"          > ${LOGS}/bbox.${BBOXTARGET}.make.log #|| exit 5
           make ${WORKERS} CFLAGS="${CFLAGS_FOR_TARGET}  --sysroot=${SYSROOT} " \
             O="${BUILDFOLDER}" \
             CROSS_COMPILE="${TOOLSDIR}/bin/${BBOXTARGET}-" install  > ${LOGS}/bbox.${BBOXTARGET}.install.log #|| exit 6
