@@ -179,7 +179,7 @@ mips64|mips64el) CFLAGS_FOR_TARGET="  -fPIC -DPIC -march=mips3 "
            GCCCONF=""
         ;;
 
-     i486) CFLAGS_FOR_TARGET="-march=i686 -mtune=genneric"
+     i486) CFLAGS_FOR_TARGET="-march=i486 -mtune=generic"
            GCCCONF="--with-arch=i486 --with-tune=generic --enable-cld"
         ;;
 
@@ -265,24 +265,24 @@ ABI=""; MUSARCH="${DESTARCH}"; GNUARCH="${DESTARCH}"; PREFIX=${DESTARCH}; case "
          *86) KERNELARCH="i386"      ; PREFIX=i386                                ;;
       armv7*) KERNELARCH="arm"       ; PREFIX=arm;      ABI=eabihf; MUSARCH=armhf ;;
        armv*) KERNELARCH="arm"       ; PREFIX=arm;      ABI=eabi  ; MUSARCH=arm   ;;
-     aarch64) KERNELARCH="arm64"     ; ;;
-        mips) KERNELARCH="mips"      ; ;;
-      mipsel) KERNELARCH="mips"      ; ;;
-      mips64) KERNELARCH="mips"      ; PREFIX=mips64;   ABI=eabi64;;
-    mips64el) KERNELARCH="mips"      ; PREFIX=mips64el; ABI=eabi64;;
-       nios2) KERNELARCH="nios2"     ;                              MUSARCH=""        ;;
-     powerpc) KERNELARCH="powerpc"   ; ;;
-   powerpc64) KERNELARCH="powerpc"   ;                              MUSARCH=powerpc64 ;;
- powerpc64le) KERNELARCH="powerpc"   ;                  MUSARCH=powerpc64le ;;
-     riscv64) KERNELARCH="riscv"     ; ;;
-     riscv32) KERNELARCH="riscv"     ;                              MUSARCH=""  ;;  # no musl support
-        or1k) KERNELARCH="openrisc"  ;              GNUARCH=""  ;;
-      sparc*) KERNELARCH="sparc"                                    MUSARCH=""  ;;
-        csky) KERNELARCH="csky"      ;   ABI=abiv2; MUSARCH=""  ;;
-        sh4*) KERNELARCH="sh"        ; ;;
-        hppa) KERNELARCH="parisc"    ;                              MUSARCH="" ;;
-       alpha) KERNELARCH="alpha"     ;                              MUSARCH="" ;;
- microblaze*) KERNELARCH="microblaze";                              GNUARCH="" ;;
+     aarch64) KERNELARCH="arm64"     ;                                            ;;
+        mips) KERNELARCH="mips"      ;                                            ;;
+      mipsel) KERNELARCH="mips"      ;                                            ;;
+      mips64) KERNELARCH="mips"      ; PREFIX=mips64;   ABI=eabi64                ;;
+    mips64el) KERNELARCH="mips"      ; PREFIX=mips64el; ABI=eabi64                ;;
+       nios2) KERNELARCH="nios2"     ;                              MUSARCH=""    ;;
+     powerpc) KERNELARCH="powerpc"   ;                                            ;;
+   powerpc64) KERNELARCH="powerpc"   ;                                            ;;
+ powerpc64le) KERNELARCH="powerpc"   ;                              MUSARCH=""    ;;
+     riscv64) KERNELARCH="riscv"     ;                                            ;;
+     riscv32) KERNELARCH="riscv"     ;                              MUSARCH=""    ;;  # no musl support
+        or1k) KERNELARCH="openrisc"  ;                              GNUARCH=""    ;;
+      sparc*) KERNELARCH="sparc"                                    MUSARCH=""    ;;
+        csky) KERNELARCH="csky"      ;                  ABI=abiv2;  MUSARCH=""    ;;
+        sh4*) KERNELARCH="sh"        ;                                            ;;
+        hppa) KERNELARCH="parisc"    ;                              MUSARCH=""    ;;
+       alpha) KERNELARCH="alpha"     ;                              MUSARCH=""    ;;
+ microblaze*) KERNELARCH="microblaze";                              GNUARCH=""    ;;
 
            *) KERNELARCH=${DESTARCH} ;;
 esac
@@ -833,6 +833,8 @@ else
         --disable-multilib --disable-multiarch  > ${LOGS}/gcc.${ELFTGT}.config.log || exit 5
   fi
 
+  exit
+
   echo "Building BOOTSTRAP HOST from ${HOSTTYPE} to ${ELFTGT} ">&2
   make ${MAKEADDFLAGS} ${WORKERS} all-gcc all-target-libgcc > ${LOGS}/gcc.${ELFTGT}.make.log || make ${MAKEADDFLAGS} V=1 all-gcc all-target-libgcc  || exit 2
 
@@ -842,25 +844,27 @@ else
 ##
 #  Add legacy executable names
 #
-  cd ${INSTPKG}/usr/libexec/gcc/${ELFTGT}/${GCCVERSION}/
-    for ITEM in ${BINUTILS}; do
-      ln -sf ../../../../bin/${ELFTGT}-${ITEM} ${ITEM}
-      ln -sf ../../../../bin/${ELFTGT}-${ITEM}
-    done
-  cd -
-
+#  cd ${INSTPKG}/usr/libexec/gcc/${ELFTGT}/${GCCVERSION}/
+#    for ITEM in ${BINUTILS}; do
+#      ln -sf ../../../../bin/${ELFTGT}-${ITEM} ${ITEM}
+#      ln -sf ../../../../bin/${ELFTGT}-${ITEM}
+#    done
+#  cd -
+#
 #  cd ${INSTPKG}
 #    makePkg ${PKG_C_BR} ${INSTPKG}
 #  cd -
 
-##
-#  Add boostrapping
+# point to the live binutils
 #
-#  cd ${INSTPKG}/usr/bin
-#    for ITEM in ${BINUTILS}; do
-#      ln -sf ${TOOLSDIR}/bin/${ELFTGT}-${ITEM}
-#    done
-#  cd -
+
+  cd ${INSTPKG}/usr/libexec/gcc/${ELFTGT}/${GCCVERSION}/
+    ln -sf ${TOOLSDIR}/bin/${ELFTGT}-ld real-ld
+    for ITEM in ${BINUTILS}  ; do
+      ln -sf ${TOOLSDIR}/bin/${ELFTGT}-${ITEM} ${ITEM}
+    done
+  cd -
+
   cd  ${TOOLSDIR}/bin/
     for ITEM in c++ cpp g++ gcc ; do
       ln -sf ${INSTPKG}/usr/bin/${ELFTGT}-${ITEM} ${TARGET}-${ITEM} 
@@ -869,9 +873,13 @@ else
     done
   cd -
 
+# Cleanup 
+#
+   rm -rf "${CWD}/gcc-${GCCVERSION}/${BUILDFOLDER}"
+
 fi
 
-#echo "SETPOINT 4">&2 ; exit
+# echo "SETPOINT 4">&2 ; exit
 
 
 #
@@ -1026,7 +1034,7 @@ cd ${CWD}; if [ -n "${GNUARCH}" ] ; then
 
 # Cleanup 
 #
-#  rm -rf "${CWD}/glibc-${GLIBCVERSION}/${BUILDFOLDER}"
+  rm -rf "${CWD}/glibc-${GLIBCVERSION}/${BUILDFOLDER}"
 #echo    ${KITCHEN}/${KERNELARCH}/linux/usr/include/linux-${KERNELARCH}/ 
 #echo    ${INSTPKG}/usr/include/${PREFIX}-linux-gnu${ABI}
 
@@ -1105,6 +1113,11 @@ ACEOF
           ln -sf ${ITEM}
         done
       cd -
+
+# Cleanup 
+#
+  rm -rf "${CWD}/glibc-${MUSLCVERSION}/${BUILDFOLDER}"
+
     fi
   fi
 fi
@@ -1259,7 +1272,7 @@ for LIBCTYPE in ${LIBCLIST} ; do
 #
     cd ${INSTPKG}/usr/libexec/gcc/${GCCTARGET}/${GCCVERSION}/
       ln -sf ${TOOLSDIR}/bin/${GCCTARGET}-ld real-ld
-      for ITEM in as ld ar ranlib nm objcopy objdump readelf size strip strings; do
+      for ITEM in ${BINUTILS}; do
         ln -sf ${TOOLSDIR}/bin/${GCCTARGET}-${ITEM} ${ITEM}
       done
     cd -
