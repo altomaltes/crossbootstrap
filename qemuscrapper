@@ -193,7 +193,7 @@ echo "| ">&2
 cd ${KITCHEN}/tools/bin/
   for ITEM in ${ARCHES}; do
     SUMMARY=""
-    for ABI in '' eabi eabihf ; do
+    for ABI in '' eabi eabihf abiv2 eabi64; do
       for LIBC in  musl gnu ; do
         FIL=${ITEM}-${VENDOR}linux-${LIBC}${ABI}-gcc  
         TGT=$( readlink ${FIL} )
@@ -391,7 +391,7 @@ echo
   if [ -n "${BBOXVERSION}" ]; then
     for BBOXTARGET in ${HOST} ${BBOXLIST} ; do
       LIBCTYPE=$( echo ${BBOXTARGET} | rev | cut -d - -f 1 | rev )
-      SROOT=$(    echo ${BBOXTARGET} | sed -e "s|-${VENDOR}linux-|/|" -e "s/eabihf//" -e "s/eabi//" )
+      SROOT=$(    echo ${BBOXTARGET} | sed -e "s|-${VENDOR}linux-|/|" -e "s/eabiv2//" -e "s/eabihf//"  -e "s/eabi64//" -e "s/eabi//" )
       BUILDFOLDER=${CWD}/busybox-${BBOXVERSION}/build-${BBOXTARGET}	
       cd "${CWD}/busybox-${BBOXVERSION}"
         if [ -x ${BUILDFOLDER}/busybox ] ; then

@@ -137,7 +137,6 @@ fi
 
 # Get the target flags  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
-# csky
 
 ARCHES='
   armv5l armv6l armv7l mips mipsel mips64 mips64el
@@ -146,7 +145,7 @@ ARCHES='
   microblaze microblazeel
   sh4 sh4eb nios2 or1k 
   riscv64 riscv32
-  hppa alpha'
+  hppa alpha csky'
 
 function getGccFlags()
 { GCCCONF=""; case ${1} in
@@ -275,14 +274,14 @@ ABI=""; MUSARCH="${DESTARCH}"; GNUARCH="${DESTARCH}"; PREFIX=${DESTARCH}; case "
    powerpc64) KERNELARCH="powerpc"   ;                                            ;;
  powerpc64le) KERNELARCH="powerpc"   ;                              MUSARCH=""    ;;
      riscv64) KERNELARCH="riscv"     ;                                            ;;
-     riscv32) KERNELARCH="riscv"     ;                              MUSARCH=""    ;;  # no musl support
+     riscv32) KERNELARCH="riscv"     ;                              MUSARCH=""    ;;  
         or1k) KERNELARCH="openrisc"  ;                              GNUARCH=""    ;;
       sparc*) KERNELARCH="sparc"                                    MUSARCH=""    ;;
         csky) KERNELARCH="csky"      ;                  ABI=abiv2;  MUSARCH=""    ;;
         sh4*) KERNELARCH="sh"        ;                                            ;;
         hppa) KERNELARCH="parisc"    ;                              MUSARCH=""    ;;
        alpha) KERNELARCH="alpha"     ;                              MUSARCH=""    ;;
- microblaze*) KERNELARCH="microblaze";                              GNUARCH=""    ;;
+ microblaze*) KERNELARCH="microblaze";                              GNUARCH1=""    ;;
 
            *) KERNELARCH=${DESTARCH} ;;
 esac
@@ -299,6 +298,7 @@ case "${DESTARCH}" in
  microblaze*) LANGUAGES="c,c++,d,jit,lto,objc,obj-c++"                     ;;
       nios2*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++"             ;;
        or1k*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++"             ;;
+       csky*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++"             ;;
      riscv32) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada"         ;;
      mips64*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada"         ;;
        hppa*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada"         ;;
@@ -832,8 +832,6 @@ else
         --with-build-time-tools=${TOOLSDIR}/bin \
         --disable-multilib --disable-multiarch  > ${LOGS}/gcc.${ELFTGT}.config.log || exit 5
   fi
-
-  exit
 
   echo "Building BOOTSTRAP HOST from ${HOSTTYPE} to ${ELFTGT} ">&2
   make ${MAKEADDFLAGS} ${WORKERS} all-gcc all-target-libgcc > ${LOGS}/gcc.${ELFTGT}.make.log || make ${MAKEADDFLAGS} V=1 all-gcc all-target-libgcc  || exit 2
