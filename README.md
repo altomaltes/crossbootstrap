@@ -6,7 +6,7 @@ Is able to build cross compilers to arm, powerpc, mips, openrisc, csky, sparc64,
 
 This is done on a orthogonal multiarch fashion. This allows the packages do not taint the root filesystem, by overwriting existing files. Also the "fossil" intermediate results are rearranged and kept, so it is possible to use them and build a new architecture root filesystem adding the /tmp/slackroot/kitchen/tools/bin to ${PATH} without installing the created packages. 
 
-The only condition for this is to have the sources visible for the script. This can be achieved mouting ( or copying ) the slackware 15.0 sources over /var/cache/source/slackware/source and musl over /var/cache/source/legacy/l/musl
+The only condition for this is to have the sources visible for the script. This can be achieved mouting ( or copying ) the slackware 15.0 sources over /var/cache/source/slackware/source and musl over /var/cache/source/legacy/l/musl. Placing this sources in /tmp/slackroot/dl is another option. 
 
 This first step implies building a set of utilities ( gcc compiler, binutils, kernel headers, and libc ) in their cross flavor.
 The script builds the packages in both glibc and muslc versions.
