@@ -51,6 +51,7 @@ WORKERS=" $(( ${MEMORY}/500000 ))"
 
 [ ${WORKERS} > $( nproc ) ] && WORKERS=$(($( nproc ) +1 ))
 WORKERS=" -j ${WORKERS} "
+WORKERS=4
 
 export LC_ALL="C"
 export PREFIX                                  # multiarch generalize
@@ -64,7 +65,7 @@ LOGS=${KITCHEN}/logs;      mkdir -p ${LOGS}
 BUILDFOLDER=build-${DESTARCH}-${HOSTTYPE}
 
 PKGEXT='tar.xz'
-EXTDIR=/var/cache/source/extra
+EXTDIR=/var/cache/source/legacy
 SRCDIR=/var/cache/source/slackware
 
 echo "">&2
@@ -75,14 +76,14 @@ if [ -f "/etc/slackware-version" ] ; then
   if  [ -f "/etc/slackpkg/slackpkg.conf"  ] ; then
     echo "Slackware build environement detected"  >&2
     . /etc/slackpkg/slackpkg.conf
-    EXTDIR=${SOURCESDIR}/extra
+    EXTDIR=${SOURCESDIR}/legacy
     SRCDIR=${SOURCESDIR}/slackware
     PKGEXT='txz'
   fi
 
   VENDOR+='-'      	
   PKGDIR=/var/cache/packages
-  EXTDIR=/var/cache/source/extra
+  EXTDIR=/var/cache/source/legacy
   SRCDIR=/var/cache/source/slackware/source
   PKGHOST=${PKGDIR}/${HOSTTYPE}
   PKGDEST=${PKGDIR}/${DESTARCH}
@@ -95,7 +96,7 @@ else
   PKGDEST=${CWD}/out
 fi
 
-EXTDIR=/var/cache/source/extra
+EXTDIR=/var/cache/source/legacy
 SRCDIR=/var/cache/source/slackware/source
 
 
@@ -118,9 +119,9 @@ for ITEM in BIN GCC KERNEL GLIBC MUSLC; do
 
   if [ -f "${!ITEM}" ] ; then
     echo  "${ITEM} found as ${!ITEM} "
-    STRIPPED=$( basename ${!ITEM} | rev | cut -s -d . -f3- | rev )
-    declare ${NAME}=$( echo $STRIPPED | rev | cut -s -d - -f1 | rev )
-    declare ${BASE}=$( echo $STRIPPED | rev | cut -s -d - -f2- | rev );
+    STRIPPED=$( basename ${!ITEM}     | rev | cut -s -d . -f3- | rev )
+    declare ${NAME}=$( echo $STRIPPED | rev | cut -s -d - -f1  | rev )
+    declare ${BASE}=$( echo $STRIPPED | rev | cut -s -d - -f2- | rev ) 
   else
     echo "No ${!ITEM} sources found on ${SRCDIR}/? or ${CWD}/dl">&2
     VENDOR='none'  # used as flag
@@ -143,11 +144,9 @@ ARCHES='
   x86_64 i586 i486 sparc64
   powerpc powerpc64 powerpc64le
   microblaze microblazeel
-  sh4 sh4eb nios2 or1k 
+  sh4 sh4eb  or1k csky
   riscv64 riscv32
-  hppa alpha '
-
-# csky
+  hppa alpha'
 
 function getGccFlags()
 { GCCCONF=""; case ${1} in
@@ -180,7 +179,7 @@ mips64|mips64el) CFLAGS_FOR_TARGET="  -fPIC -DPIC -march=mips3 "
            GCCCONF=""
         ;;
 
-     i486) CFLAGS_FOR_TARGET="-march=i486 -mtune=generic"
+     i486) CFLAGS_FOR_TARGET="-march=i686 -mtune=genneric"
            GCCCONF="--with-arch=i486 --with-tune=generic --enable-cld"
         ;;
 
@@ -196,12 +195,12 @@ mips64|mips64el) CFLAGS_FOR_TARGET="  -fPIC -DPIC -march=mips3 "
              GCCCONF="--with-cpu=ultrasparc"
           ;;
 
-    powerpc)  GCCCONF="  --with-cpu=7400  --enable-secureplt --enable-decimal-float=no "
-             CFLAGS_FOR_TARGET=" "
+    powerpc) GCCCONF="  --with-cpu=7400  --enable-secureplt --enable-decimal-float=no "
+             CFLAGS_FOR_TARGET="  -fPIC -DPIC "
           ;;
 
   powerpc64) GCCCONF="  --with-cpu=powerpc64  --with-float=hard --with-abi=elfv2 --enable-secureplt --enable-decimal-float=no --enable-targets=powerpcle-linux,powerpc-linux"
-             CFLAGS_FOR_TARGET=" -mcpu=powerpc64 -mhard-float  "
+             CFLAGS_FOR_TARGET=" -mcpu=powerpc64 -mhard-float -fPIC -DPIC "
           ;;
 
  powerpc64le) GCCCONF=" --with-cpu=power8  --with-long-double-128 "
@@ -213,7 +212,7 @@ microblaze|microblazeel)
               CFLAGS_FOR_TARGET="  "
            ;;
 
-         sh4|sh4eb|nios2|or1k|csky|hppa|alpha)
+         sh4|sh4eb|or1k|csky|hppa|alpha)
               GCCCONF="   "
               CFLAGS_FOR_TARGET="  "
            ;;
@@ -248,8 +247,8 @@ microblaze|microblazeel)
 #
 getGccFlags ${HOSTTYPE}
 CFLAGS_FOR_BUILD=${CFLAGS_FOR_TARGET}
-HOSTCONF=${GCCCONF}
 
+HOSTCONF=${GCCCONF}
 getGccFlags ${DESTARCH}
 
 
@@ -266,24 +265,24 @@ ABI=""; MUSARCH="${DESTARCH}"; GNUARCH="${DESTARCH}"; PREFIX=${DESTARCH}; case "
          *86) KERNELARCH="i386"      ; PREFIX=i386                                ;;
       armv7*) KERNELARCH="arm"       ; PREFIX=arm;      ABI=eabihf; MUSARCH=armhf ;;
        armv*) KERNELARCH="arm"       ; PREFIX=arm;      ABI=eabi  ; MUSARCH=arm   ;;
-     aarch64) KERNELARCH="arm64"     ;                                            ;;
-        mips) KERNELARCH="mips"      ;                                            ;;
-      mipsel) KERNELARCH="mips"      ;                                            ;;
-      mips64) KERNELARCH="mips"      ; PREFIX=mips64;   ABI=eabi64                ;;
-    mips64el) KERNELARCH="mips"      ; PREFIX=mips64el; ABI=eabi64                ;;
-       nios2) KERNELARCH="nios2"     ;                              MUSARCH=""    ;;
-     powerpc) KERNELARCH="powerpc"   ;                                            ;;
-   powerpc64) KERNELARCH="powerpc"   ;                                            ;;
- powerpc64le) KERNELARCH="powerpc"   ;                              MUSARCH=""    ;;
-     riscv64) KERNELARCH="riscv"     ;                                            ;;
-     riscv32) KERNELARCH="riscv"     ;                              MUSARCH=""    ;;  
-        or1k) KERNELARCH="openrisc"  ;                              GNUARCH=""    ;;
-      sparc*) KERNELARCH="sparc"                                    MUSARCH=""    ;;
-        csky) KERNELARCH="csky"      ;                  ABI=abiv2;  MUSARCH=""    ;;
-        sh4*) KERNELARCH="sh"        ;                                            ;;
-        hppa) KERNELARCH="parisc"    ;                              MUSARCH=""    ;;
-       alpha) KERNELARCH="alpha"     ;                              MUSARCH=""    ;;
- microblaze*) KERNELARCH="microblaze";                              GNUARCH1=""    ;;
+     aarch64) KERNELARCH="arm64"     ; ;;
+        mips) KERNELARCH="mips"      ; ;;
+      mipsel) KERNELARCH="mips"      ; ;;
+      mips64) KERNELARCH="mips"      ; PREFIX=mips64;   ABI=eabi64;;
+    mips64el) KERNELARCH="mips"      ; PREFIX=mips64el; ABI=eabi64;;
+       nios2) KERNELARCH="nios2"     ;                              MUSARCH=""        ;;
+     powerpc) KERNELARCH="powerpc"   ; ;;
+   powerpc64) KERNELARCH="powerpc"   ;                              MUSARCH=powerpc64 ;;
+ powerpc64le) KERNELARCH="powerpc"   ;                              MUSARCH="" ;;
+     riscv64) KERNELARCH="riscv"     ; ;;
+     riscv32) KERNELARCH="riscv"     ;                              MUSARCH=""  ;;  # no musl support
+        or1k) KERNELARCH="openrisc"  ;              GNUARCH=""  ;;
+      sparc*) KERNELARCH="sparc"                                    MUSARCH=""  ;;
+        csky) KERNELARCH="csky"      ;   ABI=abiv2; MUSARCH=""  ;;
+        sh4*) KERNELARCH="sh"        ; ;;
+        hppa) KERNELARCH="parisc"    ;                              MUSARCH="" ;;
+       alpha) KERNELARCH="alpha"     ;                              MUSARCH="" ;;
+ microblaze*) KERNELARCH="microblaze";                              GNUARCH="" ;;
 
            *) KERNELARCH=${DESTARCH} ;;
 esac
@@ -297,14 +296,12 @@ esac
 [ -n "${UCLARCH}" ] && LIBCLIST+="uclibc"
 
 case "${DESTARCH}" in
- microblaze*) LANGUAGES="c,c++,d,jit,lto,objc,obj-c++"                     ;;
-      nios2*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++"             ;;
-       or1k*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++"             ;;
-       csky*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++"             ;;
      riscv32) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada"         ;;
-     mips64*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada"         ;;
-       hppa*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada"         ;;
         *86*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada,go,brig" ;;
+     mips64*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada"         ;;
+ microblaze*) LANGUAGES="c,c++,d,jit,lto,objc,obj-c++"                     ;;
+  csky|or1k*) LANGUAGES="c,c++,d,jit,lto,objc,obj-c++"                     ;;
+       hppa*) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,ada"         ;;
            *) LANGUAGES="c,c++,d,fortran,jit,lto,objc,obj-c++,go,ada"      ;; 
 esac
 
@@ -408,6 +405,8 @@ PKGLINUX+=/linux-headers-${KERNELVERSION}-${KERNELARCH}-0.${PKGEXT}
 PKGGLIBC+=/cross-glibc-${GLIBCVERSION}-${DESTARCH}-0.${PKGEXT}
 PKGMUSLC+=/cross-musl-${MUSLCVERSION}-${DESTARCH}-0.${PKGEXT}
 PKGUCLIB+=/cross-uclibc-${UCLIBVERSION}-${DESTARCH}-0.${PKGEXT}
+
+GCCCONF+=' --disable-nls '
 
 echo "">&2
 echo "/====================================== SUMMARY  =====================================">&2
@@ -629,6 +628,8 @@ ORGDIRPREFIX=`${HOST}-gcc -print-file-name=libc.a`
 ORGDIRPREFIX=`dirname  ${ORGDIRPREFIX}`
 ORGDIRPREFIX=`realpath ${ORGDIRPREFIX} |  sed -e 's|/usr||' | sed -e 's|/lib||' `
 
+WORKERS="-j ${WORKERS}"
+
 
 #echo "SETPOINT 1 b $ORGDIRPREFIX">&2 ; exit
 #
@@ -844,38 +845,33 @@ else
 ##
 #  Add legacy executable names
 #
-#  cd ${INSTPKG}/usr/libexec/gcc/${ELFTGT}/${GCCVERSION}/
-#    for ITEM in ${BINUTILS}; do
-#      ln -sf ../../../../bin/${ELFTGT}-${ITEM} ${ITEM}
-#      ln -sf ../../../../bin/${ELFTGT}-${ITEM}
-#    done
-#  cd -
-#
+  cd ${INSTPKG}/usr/libexec/gcc/${ELFTGT}/${GCCVERSION}/
+    for ITEM in ${BINUTILS}; do
+      ln -sf ../../../../bin/${ELFTGT}-${ITEM} ${ITEM}
+      ln -sf ../../../../bin/${ELFTGT}-${ITEM}
+    done
+  cd -
+
 #  cd ${INSTPKG}
 #    makePkg ${PKG_C_BR} ${INSTPKG}
 #  cd -
 
-# point to the live binutils
+##
+#  Add boostrapping
 #
-
-  cd ${INSTPKG}/usr/libexec/gcc/${ELFTGT}/${GCCVERSION}/
-    ln -sf ${TOOLSDIR}/bin/${ELFTGT}-ld real-ld
-    for ITEM in ${BINUTILS}  ; do
-      ln -sf ${TOOLSDIR}/bin/${ELFTGT}-${ITEM} ${ITEM}
-    done
-  cd -
-
+#  cd ${INSTPKG}/usr/bin
+#    for ITEM in ${BINUTILS}; do
+#      ln -sf ${TOOLSDIR}/bin/${ELFTGT}-${ITEM}
+#    done
+#  cd -
   cd  ${TOOLSDIR}/bin/
-    for ITEM in c++ cpp g++ gcc ; do
+#    for ITEM in c++ cpp g++ gcc ; do
+    for ITEM in cpp gcc ; do
       ln -sf ${INSTPKG}/usr/bin/${ELFTGT}-${ITEM} ${TARGET}-${ITEM} 
       ln -sf ${INSTPKG}/usr/bin/${ELFTGT}-${ITEM} ${MUSLT}-${ITEM} 
       ln -sf ${INSTPKG}/usr/bin/${ELFTGT}-${ITEM} ${ELFTGT}-${ITEM} 
     done
   cd -
-
-# Cleanup 
-#
-   rm -rf "${CWD}/gcc-${GCCVERSION}/${BUILDFOLDER}"
 
 fi
 
@@ -930,7 +926,9 @@ cd ${CWD}; if [ -n "${GNUARCH}" ] ; then
   else
     mkdir -p "glibc-${GLIBCVERSION}/${BUILDFOLDER}"; cd "glibc-${GLIBCVERSION}/${BUILDFOLDER}"
     if [ -z "$( grep 'exit 0' config.log )" ] ; then # not sussesfull configuration
-      echo "Configuring GLIBC ${GLIBCVERSION}">&2
+      echo "Configuring GLIBC ${GLIBCVERSION} ...">&2
+      ac_cv_prog_OBJCOPY=${TARGET}-objcopy \
+      ac_cv_prog_OBJDUMP=${TARGET}-objdump \
       CFLAGS=" --sysroot=${INSTPKG} ${CFLAGS_FOR_TARGET} -O2 " \
       ../configure ${DOCCONF} \
           --with-pkgversion="Slackware 15.1 Cross Compiler Suite" \
@@ -1034,7 +1032,7 @@ cd ${CWD}; if [ -n "${GNUARCH}" ] ; then
 
 # Cleanup 
 #
-  rm -rf "${CWD}/glibc-${GLIBCVERSION}/${BUILDFOLDER}"
+#  rm -rf "${CWD}/glibc-${GLIBCVERSION}/${BUILDFOLDER}"
 #echo    ${KITCHEN}/${KERNELARCH}/linux/usr/include/linux-${KERNELARCH}/ 
 #echo    ${INSTPKG}/usr/include/${PREFIX}-linux-gnu${ABI}
 
@@ -1066,7 +1064,7 @@ cd ${CWD}; if [ -n "${MUSARCH}" ] ; then
         --includedir=usr/include/${PREFIX}-linux-musl${ABI} > ${LOGS}/libc.${MUSLT}.config.log || exit 16
 
       echo "Building musl ${MUSLCVERSION}">&2
-      make ${WORKERS}   > ${LOGS}/libc.${MUSLT}.make.log  || exit 17
+      make ${WORKERS}  > ${LOGS}/libc.${MUSLT}.make.log  || exit 17
       echo "Installing musl ${MUSLCVERSION}">&2
       rm -rf ${INSTPKG}; make DESTDIR=${INSTPKG} install  > ${LOGS}/libc.${MUSLT}.install.log
 
@@ -1113,11 +1111,6 @@ ACEOF
           ln -sf ${ITEM}
         done
       cd -
-
-# Cleanup 
-#
-  rm -rf "${CWD}/glibc-${MUSLCVERSION}/${BUILDFOLDER}"
-
     fi
   fi
 fi
@@ -1178,11 +1171,14 @@ fi
 
 # Build GCC Finale ( same as boostrap plus glibc ) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
-
 for LIBCTYPE in ${LIBCLIST} ; do
 
   case ${LIBCTYPE} in
-       musl) DISTPKG=${PKG_C_ML} ; LANGUAGES=$( echo ${LANGUAGES} | sed -e 's|,go,|,|' -e 's|,d,|,|' ) ;;  # d and go must be heavily patched under musl
+       musl) DISTPKG=${PKG_C_ML} ; 
+             LANGUAGES=$( echo ${LANGUAGES} | sed -e 's|,go,|,|' -e 's|,d,|,|' ) 
+             LANGUAGES+=' --enable-clocale=newlib '
+          ;;  # d and go must be heavily patched under musl
+
         gnu) DISTPKG=${PKG_C_GN} ;;
      uclibc) DISTPKG=${PKG_C_UC} ;;
   esac
@@ -1202,6 +1198,9 @@ for LIBCTYPE in ${LIBCLIST} ; do
         echo "Configuring GCC for ${GCCTARGET} finale ... "
         mkdir -p "gcc-${GCCVERSION}/finale/${GCCTARGET}"
         cd "gcc-${GCCVERSION}/finale/${GCCTARGET}"
+        export CXXCPP=${HOST}-cpp  # build flaw. c++ preprocessor not needed at all, but required sanity
+        export    CPP=${HOST}-cpp 
+        CXXFLAGS_FOR_TARGET=${CFLAGS_FOR_TARGET}${CXXFLAGS_FOR_TARGET} \
         ../../configure ${GCCCONF}  --host=${HOST} --build=${HOST} --target=${GCCTARGET}  \
             --with-pkgversion="Slackware 15.1 Cross Compiler Suite" \
             --enable-languages=${LANGUAGES} \
@@ -1227,7 +1226,7 @@ for LIBCTYPE in ${LIBCLIST} ; do
       fi
          
       echo "Building GCC FINALE for ${GCCTARGET} finale">&2
-      make ${WORKERS} LIBDIRPREFIX=/${PREFIX}-linux-${LIBCTYPE}${ABI}  >  ${LOGS}/finale.${GCCTARGET}.make.log || exit 1 
+      make ${WORKERS} LIBDIRPREFIX=/${PREFIX}-linux-${LIBCTYPE}${ABI}  >  ${LOGS}/finale.${GCCTARGET}.make.log || make || exit 1 
       make            LIBDIRPREFIX=/${PREFIX}-linux-${LIBCTYPE}${ABI}           || exit 1
 
       echo "Installing GCC FINALE">&2
@@ -1260,8 +1259,27 @@ for LIBCTYPE in ${LIBCLIST} ; do
 #  this cross compilation does not nest the same name system includes
 #
       for ITEM in ${INSTPKG}/usr/lib/${PREFIX}-linux-${LIBCTYPE}${ABI}/gcc/${GCCTARGET}/${GCCVERSION}/include-fixed/limits.h; do
-       sed -e "s|#endif /\* _LIMITS_H___ \*/|#define  _GCC_LIMITS_H_ \n\n#include <${PREFIX}-linux-${LIBCTYPE}${ABI}/limits.h>\n\n#endif /* _LIMITS_H_JACS_ */|g" -i ${ITEM} || exit 53
+       sed -e "s|#endif /\* _LIMITS_H___ \*/|#define _GCC_LIMITS_H_ \n#include_next <limits.h>\n\n#endif /* _LIMITS_H_JACS_ */|g" -i ${ITEM} || exit 53
       done
+
+# Move libraries so everybody can use it in a multiarch environement
+#
+      echo "Move libraries so everybody can use it in a multiarch environement"
+
+      rm ${INSTPKG}/usr/${GCCTARGET}/lib/*.la
+      rm ${INSTPKG}/usr/lib/${PREFIX}-linux-${LIBCTYPE}${ABI}/gcc/${GCCTARGET}/${GCCVERSION}/*.la
+
+      cd ${INSTPKG}/usr/lib/${PREFIX}-linux-${LIBCTYPE}${ABI}/gcc/${GCCTARGET}/${GCCVERSION}/
+
+        for ITEM in ${INSTPKG}/usr/${GCCTARGET}/lib/*.{so,a,so.1} *.a ; do
+          FILE=$( echo ${ITEM} | rev | cut -f1  -d / | rev )
+          mv ${ITEM} ../../../ 
+          ln -s      ../../../${FILE}
+        done
+
+        mv ${INSTPKG}/usr/${GCCTARGET}/lib/* ${INSTPKG}/usr/lib/${PREFIX}-linux-${LIBCTYPE}${ABI}/
+        rmdir ${INSTPKG}/usr/${GCCTARGET}/lib/
+      cd -
 
       echo "Creating cross gcc ${DISTPKG} package for ${DESTARCH}">&2
       makePkg ${DISTPKG} ${INSTPKG}  $( dirname ${GCC} )/slack-desc.gcc
@@ -1272,7 +1290,7 @@ for LIBCTYPE in ${LIBCLIST} ; do
 #
     cd ${INSTPKG}/usr/libexec/gcc/${GCCTARGET}/${GCCVERSION}/
       ln -sf ${TOOLSDIR}/bin/${GCCTARGET}-ld real-ld
-      for ITEM in ${BINUTILS}; do
+      for ITEM in as ld ar ranlib nm objcopy objdump readelf size strip strings; do
         ln -sf ${TOOLSDIR}/bin/${GCCTARGET}-${ITEM} ${ITEM}
       done
     cd -
@@ -1285,19 +1303,21 @@ for LIBCTYPE in ${LIBCLIST} ; do
       done
     cd -
 
+
 # Cleanup 
 #
    rm -rf "${CWD}/gcc-${GCCVERSION}/finale/${GCCTARGET}"
 
- else
-   echo "gcc finale ${DISTPKG} package created from ${INSTPKG} ">&2
- fi
+  else
+    echo "gcc finale ${DISTPKG} package created from ${INSTPKG} ">&2
+  fi
 
 done
 
-#echo "SETPOINT 8 ">&2; exit
-
-echo ----------------------
+echo 
+echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+echo "~~~          Job done            ~~~"
+echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 
 
 exit 0 
