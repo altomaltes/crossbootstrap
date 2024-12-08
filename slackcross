@@ -64,29 +64,26 @@ LOGS=${KITCHEN}/logs;      mkdir -p ${LOGS}
 
 BUILDFOLDER=build-${DESTARCH}-${HOSTTYPE}
 
-PKGEXT='tar.xz'
-EXTDIR=/var/cache/source/legacy
-SRCDIR=/var/cache/source/slackware
-
 echo "">&2
 if [ -f "/etc/slackware-version" ] ; then
   echo "Slackware version $(cat /etc/slackware-version ) detected" >&2
   VENDOR=slackware
 
+  SOURCESDIR=/var/cache/source
+
   if  [ -f "/etc/slackpkg/slackpkg.conf"  ] ; then
     echo "Slackware build environement detected"  >&2
     . /etc/slackpkg/slackpkg.conf
-    EXTDIR=${SOURCESDIR}/legacy
-    SRCDIR=${SOURCESDIR}/slackware
-    PKGEXT='txz'
   fi
 
+  EXTDIR=${SOURCESDIR}/legacy
+  SRCDIR=${SOURCESDIR}/slackware/source
   VENDOR+='-'      	
   PKGDIR=/var/cache/packages
-  EXTDIR=/var/cache/source/legacy
-  SRCDIR=/var/cache/source/slackware/source
   PKGHOST=${PKGDIR}/${HOSTTYPE}
   PKGDEST=${PKGDIR}/${DESTARCH}
+  PKGEXT='txz'
+
 else
   echo "Generic builder" >&2
   VENDOR=''
@@ -94,13 +91,11 @@ else
   EXTDIR=${CWD}/dl
   PKGHOST=${CWD}/out
   PKGDEST=${CWD}/out
+  PKGEXT='tar.xz'
+
 fi
 
-EXTDIR=/var/cache/source/legacy
-SRCDIR=/var/cache/source/slackware/source
-
-
-mkdir -p ${SRCDIR} ${PKGDIR}
+mkdir -p ${SRCDIR} ${PKGDIR} ${EXTDIR}
 
 # Seach for source packages ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
@@ -179,7 +174,7 @@ mips64|mips64el) CFLAGS_FOR_TARGET="  -fPIC -DPIC -march=mips3 "
            GCCCONF=""
         ;;
 
-     i486) CFLAGS_FOR_TARGET="-march=i686 -mtune=genneric"
+     i486) CFLAGS_FOR_TARGET="-march=i486 -mtune=generic"
            GCCCONF="--with-arch=i486 --with-tune=generic --enable-cld"
         ;;
 
